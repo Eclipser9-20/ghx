@@ -98,7 +98,7 @@ pub fn run(client: &Client, channel: &str) -> Result<()> {
     let _ = std::fs::remove_file(&backup);
 
     println!(
-        "Updated to {tag} ({channel} channel). Restart ghx to use the new version."
+        "Updated to {tag} ({channel} channel). The new version will be used next time you run ghx."
     );
     Ok(())
 }
