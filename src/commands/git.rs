@@ -1,5 +1,5 @@
 use crate::git;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
 
 #[derive(clap::Subcommand)]
@@ -195,9 +195,16 @@ pub fn add(paths: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn commit(message: &str) -> Result<()> {
-    let id = git::commit(message)?;
-    println!("{} Committed {}", "✓".green().bold(), id.yellow());
+pub fn commit(message: Option<String>, generate: bool) -> Result<()> {
+    let message = if generate {
+        let diff = crate::git::diff(true)?;
+        crate::ai::generate_commit_message(&diff)?
+    } else {
+        message.context("a commit message is required (-m) or use --generate")?
+    };
+    let id = git::commit(&message)?;
+    let summary = message.lines().next().unwrap_or("");
+    println!("{} Committed {} - {}", "✓".green().bold(), id.yellow(), summary);
     Ok(())
 }
 
@@ -226,5 +233,11 @@ pub fn clone(url: &str, dir: Option<&str>) -> Result<()> {
 pub fn reset(mode: &str, target: &str) -> Result<()> {
     git::reset(mode, target)?;
     println!("{} Reset ({}) to {}", "✓".green().bold(), mode, target.cyan());
+    Ok(())
+}
+
+pub fn merge(branch: &str) -> Result<()> {
+    let result = git::merge(branch)?;
+    println!("{} {}", "✓".green().bold(), result);
     Ok(())
 }

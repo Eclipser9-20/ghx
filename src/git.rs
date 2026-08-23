@@ -583,3 +583,54 @@ pub fn reset(mode: &str, target: &str) -> Result<()> {
     repo.reset(&obj, reset_type, None)
         .with_context(|| format!("resetting ({mode}) to {target}"))
 }
+
+pub fn merge(branch: &str) -> Result<String> {
+    let repo = open_current()?;
+    let their_branch = repo
+        .find_branch(branch, BranchType::Local)
+        .or_else(|_| repo.find_branch(&format!("origin/{branch}"), BranchType::Remote))
+        .with_context(|| format!("no such branch: {branch}"))?;
+    let their_commit = their_branch.get().peel_to_commit()?;
+    let their_annotated = repo.find_annotated_commit(their_commit.id())?;
+
+    let (analysis, _) = repo.merge_analysis(&[&their_annotated])?;
+
+    if analysis.is_up_to_date() {
+        return Ok("already up to date".to_string());
+    }
+
+    if analysis.is_fast_forward() {
+        let refname = format!("refs/heads/{}", current_branch()?);
+        let mut r = repo.find_reference(&refname)?;
+        r.set_target(their_commit.id(), "ghx merge: fast-forward")?;
+        repo.set_head(&refname)?;
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
+        return Ok(format!(
+            "fast-forwarded to {}",
+            &their_commit.id().to_string()[..7]
+        ));
+    }
+
+    repo.merge(&[&their_annotated], None, None)?;
+    let mut index = repo.index()?;
+    if index.has_conflicts() {
+        bail!("merge has conflicts — resolve them, then `ghx add` the fixed files and `ghx commit`");
+    }
+
+    let tree_id = index.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+    let sig = repo
+        .signature()
+        .context("could not determine author identity — set user.name/user.email")?;
+    let head_commit = repo.head()?.peel_to_commit()?;
+    let oid = repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        &format!("Merge branch '{branch}'"),
+        &tree,
+        &[&head_commit, &their_commit],
+    )?;
+    repo.cleanup_state()?;
+    Ok(format!("merged as {}", &oid.to_string()[..7]))
+}

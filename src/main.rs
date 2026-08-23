@@ -164,6 +164,8 @@ enum Command {
         #[arg(default_value = "HEAD")]
         target: String,
     },
+    /// Merge a branch into the current branch
+    Merge { branch: String },
     /// Git LFS: track large files as pointer files, backed by GitHub's LFS
     /// batch API
     Lfs {
@@ -230,6 +232,7 @@ fn run() -> Result<()> {
         } => return gitcmd::tag(create, message, delete, push),
         Command::Remote { cmd } => return gitcmd::remote(cmd),
         Command::Reset { mode, target } => return gitcmd::reset(&mode, &target),
+        Command::Merge { branch } => return gitcmd::merge(&branch),
         Command::Lfs { cmd } => return lfscmd::run(cmd),
         _ => {}
     }
