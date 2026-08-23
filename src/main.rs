@@ -219,7 +219,12 @@ fn run() -> Result<()> {
     }
 
     if let Some(channel) = cli.update {
-        let token = config::Config::resolve_token()?;
+        // A token is only ever used here for a higher GitHub API rate
+        // limit — release downloads themselves are public and need no
+        // auth — so a credential-store hiccup (e.g. a Keychain prompt
+        // that can't complete) must never block an update. Treat any
+        // resolution failure as "no token" instead of propagating it.
+        let token = config::Config::resolve_token().unwrap_or(None);
         let client = api::Client::new(token)?;
         return update::run(&client, &channel);
     }
