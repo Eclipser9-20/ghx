@@ -2,6 +2,7 @@ mod api;
 mod commands;
 mod config;
 mod git;
+mod update;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -15,6 +16,10 @@ struct Cli {
 
     #[arg(short = 'h', long = "help", action = clap::ArgAction::SetTrue)]
     help: bool,
+
+    /// Update ghx to the latest release on a channel: stable, beta, or dev
+    #[arg(long, value_name = "CHANNEL")]
+    update: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -153,6 +158,13 @@ fn run() -> Result<()> {
     }
 
     let cli = Cli::parse();
+
+    if let Some(channel) = cli.update {
+        let token = config::Config::resolve_token()?;
+        let client = api::Client::new(token)?;
+        return update::run(&client, &channel);
+    }
+
     let Some(command) = cli.command else {
         print_tree();
         return Ok(());
