@@ -88,19 +88,28 @@ fn credentials_callback<'a>() -> impl FnMut(
        + 'a {
     let token = Config::resolve_token().ok().flatten();
     move |_url, username_from_url, allowed| {
-        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
-            if let Some(t) = &token {
-                // Fine-grained PATs (and GitHub Apps tokens) reject the
-                // classic "token-as-username" convention with a 403 —
-                // the token must be the password, with any non-empty
-                // username.
-                return Cred::userpass_plaintext("x-access-token", t);
-            }
-        }
         if allowed.contains(CredentialType::SSH_KEY) {
             let user = username_from_url.unwrap_or("git");
             if let Ok(cred) = Cred::ssh_key_from_agent(user) {
                 return Ok(cred);
+            }
+        }
+        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
+            match &token {
+                // Fine-grained PATs (and GitHub Apps tokens) reject the
+                // classic "token-as-username" convention with a 403 —
+                // the token must be the password, with any non-empty
+                // username.
+                Some(t) => return Cred::userpass_plaintext("x-access-token", t),
+                // Surface our own message instead of falling through to
+                // Cred::default(), which libgit2 rejects with a generic
+                // "Username and password must be provided" — accurate,
+                // but it gives no hint that `ghx auth login` is the fix.
+                None => {
+                    return Err(git2::Error::from_str(
+                        "not logged in — run `ghx auth login`",
+                    ))
+                }
             }
         }
         Cred::default()
