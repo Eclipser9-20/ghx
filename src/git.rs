@@ -6,7 +6,7 @@ use crate::config::Config;
 use anyhow::{bail, Context, Result};
 use git2::{
     BranchType, Cred, CredentialType, FetchOptions, PushOptions, RemoteCallbacks, Repository,
-    StatusOptions,
+    ResetType, StatusOptions,
 };
 use std::path::Path;
 
@@ -406,4 +406,129 @@ pub fn push(remote_name: &str, branch: Option<&str>) -> Result<()> {
         .push(&[refspec.as_str()], Some(&mut po))
         .with_context(|| format!("pushing {branch} to {remote_name}"))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------
+// stash — one of the most notoriously fiddly parts of git's own CLI
+// ---------------------------------------------------------------------
+
+pub fn stash_save(message: Option<&str>) -> Result<()> {
+    let mut repo = open_current()?;
+    let sig = repo
+        .signature()
+        .context("could not determine author identity — set user.name/user.email")?;
+    repo.stash_save2(&sig, message, None)
+        .context("nothing to stash (working tree clean?)")?;
+    Ok(())
+}
+
+pub struct StashEntry {
+    pub index: usize,
+    pub message: String,
+}
+
+pub fn stash_list() -> Result<Vec<StashEntry>> {
+    let mut repo = open_current()?;
+    let mut out = Vec::new();
+    repo.stash_foreach(|index, message, _oid| {
+        out.push(StashEntry {
+            index,
+            message: message.to_string(),
+        });
+        true
+    })?;
+    Ok(out)
+}
+
+pub fn stash_pop(index: usize) -> Result<()> {
+    let mut repo = open_current()?;
+    repo.stash_pop(index, None)
+        .with_context(|| format!("popping stash@{{{index}}}"))
+}
+
+pub fn stash_drop(index: usize) -> Result<()> {
+    let mut repo = open_current()?;
+    repo.stash_drop(index)
+        .with_context(|| format!("dropping stash@{{{index}}}"))
+}
+
+// ---------------------------------------------------------------------
+// tags
+// ---------------------------------------------------------------------
+
+pub fn tag_list() -> Result<Vec<String>> {
+    let repo = open_current()?;
+    let names = repo.tag_names(None)?;
+    Ok(names.iter().flatten().map(str::to_string).collect())
+}
+
+pub fn tag_create(name: &str, message: Option<&str>) -> Result<()> {
+    let repo = open_current()?;
+    let head = repo.head()?.peel_to_commit()?;
+    match message {
+        Some(msg) => {
+            let sig = repo
+                .signature()
+                .context("could not determine author identity — set user.name/user.email")?;
+            repo.tag(name, head.as_object(), &sig, msg, false)?;
+        }
+        None => {
+            repo.tag_lightweight(name, head.as_object(), false)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn tag_delete(name: &str) -> Result<()> {
+    let repo = open_current()?;
+    repo.tag_delete(name)
+        .with_context(|| format!("deleting tag {name}"))
+}
+
+// ---------------------------------------------------------------------
+// remotes
+// ---------------------------------------------------------------------
+
+pub fn remote_list() -> Result<Vec<(String, String)>> {
+    let repo = open_current()?;
+    let names = repo.remotes()?;
+    let mut out = Vec::new();
+    for name in names.iter().flatten() {
+        if let Ok(remote) = repo.find_remote(name) {
+            out.push((name.to_string(), remote.url().unwrap_or("").to_string()));
+        }
+    }
+    Ok(out)
+}
+
+pub fn remote_add(name: &str, url: &str) -> Result<()> {
+    let repo = open_current()?;
+    repo.remote(name, url)
+        .with_context(|| format!("adding remote {name}"))?;
+    Ok(())
+}
+
+pub fn remote_remove(name: &str) -> Result<()> {
+    let repo = open_current()?;
+    repo.remote_delete(name)
+        .with_context(|| format!("removing remote {name}"))
+}
+
+// ---------------------------------------------------------------------
+// reset
+// ---------------------------------------------------------------------
+
+pub fn reset(mode: &str, target: &str) -> Result<()> {
+    let repo = open_current()?;
+    let obj = repo
+        .revparse_single(target)
+        .with_context(|| format!("no such revision: {target}"))?;
+    let reset_type = match mode {
+        "soft" => ResetType::Soft,
+        "mixed" => ResetType::Mixed,
+        "hard" => ResetType::Hard,
+        other => bail!("unknown reset mode '{other}' (expected soft, mixed, or hard)"),
+    };
+    repo.reset(&obj, reset_type, None)
+        .with_context(|| format!("resetting ({mode}) to {target}"))
 }
