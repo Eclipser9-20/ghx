@@ -39,7 +39,52 @@ fn find_release(client: &Client, channel: &str) -> Result<Value> {
     }
 }
 
+/// Best-effort, idempotent: creates the shared maintenance group if it
+/// doesn't already exist, so a system-wide install stays updatable by
+/// anyone added to that group even if the installer script was never run
+/// again after the group convention was introduced. Silently does nothing
+/// when the caller lacks permission to create groups (e.g. a per-user
+/// install, or an unprivileged account) — that's expected, not an error.
+fn ensure_maintenance_group() {
+    const GROUP_NAME: &str = "_GHXmaintenance";
+
+    #[cfg(unix)]
+    {
+        let exists = std::process::Command::new("getent")
+            .args(["group", GROUP_NAME])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !exists {
+            if cfg!(target_os = "macos") {
+                let _ = std::process::Command::new("dseditgroup")
+                    .args(["-o", "create", GROUP_NAME])
+                    .status();
+            } else {
+                let _ = std::process::Command::new("groupadd")
+                    .arg(GROUP_NAME)
+                    .status();
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let exists = std::process::Command::new("net")
+            .args(["localgroup", GROUP_NAME])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !exists {
+            let _ = std::process::Command::new("net")
+                .args(["localgroup", GROUP_NAME, "/add"])
+                .status();
+        }
+    }
+}
+
 pub fn run(client: &Client, channel: &str) -> Result<()> {
+    ensure_maintenance_group();
     let channel = channel.to_ascii_lowercase();
     let release = find_release(client, &channel)?;
     let tag = release["tag_name"].as_str().unwrap_or("?");
