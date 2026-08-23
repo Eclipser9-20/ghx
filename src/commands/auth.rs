@@ -20,6 +20,8 @@ pub enum AuthCommand {
     Status,
     /// Log out and forget the stored token
     Logout,
+    /// Print the resolved auth token (for scripting — piping into other tools' Authorization headers, etc.)
+    Token,
 }
 
 pub fn run(cmd: AuthCommand) -> Result<()> {
@@ -33,7 +35,14 @@ pub fn run(cmd: AuthCommand) -> Result<()> {
         }
         AuthCommand::Status => status(),
         AuthCommand::Logout => logout(),
+        AuthCommand::Token => token(),
     }
+}
+
+fn token() -> Result<()> {
+    let t = Config::resolve_token()?.context("not authenticated — run `ghx auth login` first")?;
+    println!("{t}");
+    Ok(())
 }
 
 fn login_with_token() -> Result<()> {

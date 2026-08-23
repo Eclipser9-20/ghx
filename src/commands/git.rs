@@ -3,99 +3,9 @@ use anyhow::Result;
 use colored::Colorize;
 
 #[derive(clap::Subcommand)]
-pub enum GitCommand {
-    /// Show working tree status
-    Status,
-    /// Show commit history
-    Log {
-        #[arg(long, default_value_t = 10)]
-        limit: usize,
-    },
-    /// Show changes (working tree by default, or staged with --staged)
-    Diff {
-        #[arg(long)]
-        staged: bool,
-    },
-    /// List, create, or delete branches
-    Branch {
-        /// Create a branch with this name
-        #[arg(long)]
-        create: Option<String>,
-        /// Delete a branch with this name
-        #[arg(long)]
-        delete: Option<String>,
-    },
-    /// Switch to a branch or revision
-    Checkout { refname: String },
-    /// Stage files (defaults to all changes)
-    Add {
-        #[arg(default_value = None)]
-        paths: Vec<String>,
-    },
-    /// Record staged changes
-    Commit {
-        #[arg(short = 'm', long)]
-        message: String,
-    },
-    /// Download objects/refs from a remote
-    Fetch {
-        #[arg(default_value = "origin")]
-        remote: String,
-    },
-    /// Fetch and fast-forward the current branch
-    Pull {
-        #[arg(default_value = "origin")]
-        remote: String,
-    },
-    /// Upload the current (or given) branch to a remote
-    Push {
-        #[arg(default_value = "origin")]
-        remote: String,
-        branch: Option<String>,
-    },
-    /// Clone a repository by URL
-    Clone {
-        url: String,
-        dir: Option<String>,
-    },
-    /// Stash uncommitted changes
-    Stash {
-        #[command(subcommand)]
-        cmd: StashCommand,
-    },
-    /// List, create, or delete tags
-    Tag {
-        /// Create a tag with this name
-        #[arg(long)]
-        create: Option<String>,
-        /// Annotate the created tag with this message (implies an annotated, not lightweight, tag)
-        #[arg(short = 'm', long)]
-        message: Option<String>,
-        /// Delete a tag with this name
-        #[arg(long)]
-        delete: Option<String>,
-    },
-    /// List, add, or remove remotes
-    Remote {
-        #[command(subcommand)]
-        cmd: RemoteCommand,
-    },
-    /// Reset the current branch to a revision
-    Reset {
-        /// soft (keep changes staged), mixed (keep changes unstaged), or hard (discard changes)
-        #[arg(long, default_value = "mixed", value_parser = ["soft", "mixed", "hard"])]
-        mode: String,
-        #[arg(default_value = "HEAD")]
-        target: String,
-    },
-}
-
-#[derive(clap::Subcommand)]
 pub enum StashCommand {
     /// Save uncommitted changes and revert the working tree
-    Save {
-        message: Option<String>,
-    },
+    Save { message: Option<String> },
     /// List saved stashes
     List,
     /// Apply and remove a stash (defaults to the most recent)
@@ -120,53 +30,7 @@ pub enum RemoteCommand {
     Remove { name: String },
 }
 
-pub fn run(cmd: GitCommand) -> Result<()> {
-    match cmd {
-        GitCommand::Status => status(),
-        GitCommand::Log { limit } => log(limit),
-        GitCommand::Diff { staged } => diff(staged),
-        GitCommand::Branch { create, delete } => branch(create, delete),
-        GitCommand::Checkout { refname } => {
-            git::checkout(&refname)?;
-            println!("{} Switched to {}", "✓".green().bold(), refname.cyan());
-            Ok(())
-        }
-        GitCommand::Add { paths } => add(paths),
-        GitCommand::Commit { message } => commit(&message),
-        GitCommand::Fetch { remote } => {
-            git::fetch(&remote)?;
-            println!("{} Fetched {}", "✓".green().bold(), remote);
-            Ok(())
-        }
-        GitCommand::Pull { remote } => {
-            git::pull(&remote)?;
-            println!("{} Pulled {}", "✓".green().bold(), remote);
-            Ok(())
-        }
-        GitCommand::Push { remote, branch } => {
-            git::push(&remote, branch.as_deref())?;
-            println!("{} Pushed to {}", "✓".green().bold(), remote);
-            Ok(())
-        }
-        GitCommand::Clone { url, dir } => {
-            git::clone(&url, dir.as_ref().map(std::path::Path::new))
-        }
-        GitCommand::Stash { cmd } => stash(cmd),
-        GitCommand::Tag {
-            create,
-            message,
-            delete,
-        } => tag(create, message, delete),
-        GitCommand::Remote { cmd } => remote(cmd),
-        GitCommand::Reset { mode, target } => {
-            git::reset(&mode, &target)?;
-            println!("{} Reset ({}) to {}", "✓".green().bold(), mode, target.cyan());
-            Ok(())
-        }
-    }
-}
-
-fn stash(cmd: StashCommand) -> Result<()> {
+pub fn stash(cmd: StashCommand) -> Result<()> {
     match cmd {
         StashCommand::Save { message } => {
             git::stash_save(message.as_deref())?;
@@ -197,7 +61,7 @@ fn stash(cmd: StashCommand) -> Result<()> {
     }
 }
 
-fn tag(create: Option<String>, message: Option<String>, delete: Option<String>) -> Result<()> {
+pub fn tag(create: Option<String>, message: Option<String>, delete: Option<String>) -> Result<()> {
     if let Some(name) = create {
         git::tag_create(&name, message.as_deref())?;
         println!("{} Created tag {}", "✓".green().bold(), name.cyan());
@@ -214,7 +78,7 @@ fn tag(create: Option<String>, message: Option<String>, delete: Option<String>) 
     Ok(())
 }
 
-fn remote(cmd: RemoteCommand) -> Result<()> {
+pub fn remote(cmd: RemoteCommand) -> Result<()> {
     match cmd {
         RemoteCommand::List => {
             for (name, url) in git::remote_list()? {
@@ -235,7 +99,7 @@ fn remote(cmd: RemoteCommand) -> Result<()> {
     }
 }
 
-fn status() -> Result<()> {
+pub fn status() -> Result<()> {
     let entries = git::status()?;
     if entries.is_empty() {
         println!("{}", "working tree clean".green());
@@ -254,7 +118,7 @@ fn status() -> Result<()> {
     Ok(())
 }
 
-fn log(limit: usize) -> Result<()> {
+pub fn log(limit: usize) -> Result<()> {
     for entry in git::log(limit)? {
         println!(
             "{} {}  {}  {}",
@@ -267,7 +131,7 @@ fn log(limit: usize) -> Result<()> {
     Ok(())
 }
 
-fn diff(staged: bool) -> Result<()> {
+pub fn diff(staged: bool) -> Result<()> {
     let text = git::diff(staged)?;
     if text.is_empty() {
         println!("{}", "no changes".dimmed());
@@ -285,7 +149,7 @@ fn diff(staged: bool) -> Result<()> {
     Ok(())
 }
 
-fn branch(create: Option<String>, delete: Option<String>) -> Result<()> {
+pub fn branch(create: Option<String>, delete: Option<String>) -> Result<()> {
     if let Some(name) = create {
         git::branch_create(&name)?;
         println!("{} Created branch {}", "✓".green().bold(), name.cyan());
@@ -306,7 +170,13 @@ fn branch(create: Option<String>, delete: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn add(paths: Vec<String>) -> Result<()> {
+pub fn checkout(refname: &str) -> Result<()> {
+    git::checkout(refname)?;
+    println!("{} Switched to {}", "✓".green().bold(), refname.cyan());
+    Ok(())
+}
+
+pub fn add(paths: Vec<String>) -> Result<()> {
     if paths.is_empty() {
         git::add_all()?;
     } else {
@@ -316,8 +186,36 @@ fn add(paths: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn commit(message: &str) -> Result<()> {
+pub fn commit(message: &str) -> Result<()> {
     let id = git::commit(message)?;
     println!("{} Committed {}", "✓".green().bold(), id.yellow());
+    Ok(())
+}
+
+pub fn fetch(remote: &str) -> Result<()> {
+    git::fetch(remote)?;
+    println!("{} Fetched {}", "✓".green().bold(), remote);
+    Ok(())
+}
+
+pub fn pull(remote: &str) -> Result<()> {
+    git::pull(remote)?;
+    println!("{} Pulled {}", "✓".green().bold(), remote);
+    Ok(())
+}
+
+pub fn push(remote: &str, branch: Option<&str>) -> Result<()> {
+    git::push(remote, branch)?;
+    println!("{} Pushed to {}", "✓".green().bold(), remote);
+    Ok(())
+}
+
+pub fn clone(url: &str, dir: Option<&str>) -> Result<()> {
+    git::clone(url, dir.map(std::path::Path::new))
+}
+
+pub fn reset(mode: &str, target: &str) -> Result<()> {
+    git::reset(mode, target)?;
+    println!("{} Reset ({}) to {}", "✓".green().bold(), mode, target.cyan());
     Ok(())
 }

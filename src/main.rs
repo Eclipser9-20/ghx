@@ -5,7 +5,7 @@ mod git;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use commands::{auth, git as git_cmd, issue, pr, repo};
+use commands::{auth, git as gitcmd, issue, pr, repo, run as runcmd};
 
 #[derive(Parser)]
 #[command(name = "ghx", version, about = "A GitHub CLI, in Rust", disable_help_flag = true)]
@@ -19,6 +19,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    // ---- GitHub -----------------------------------------------------
     /// Authenticate with GitHub
     Auth {
         #[command(subcommand)]
@@ -39,10 +40,96 @@ enum Command {
         #[command(subcommand)]
         cmd: issue::IssueCommand,
     },
-    /// Native git operations (no shelling out — backed by libgit2 directly)
-    Git {
+    /// Work with GitHub Actions workflow runs
+    Run {
         #[command(subcommand)]
-        cmd: git_cmd::GitCommand,
+        cmd: runcmd::RunCommand,
+    },
+    /// Print a file's contents from a repo (owner/repo/path/to/file)
+    Raw {
+        spec: String,
+        #[arg(long = "ref")]
+        git_ref: Option<String>,
+    },
+
+    // ---- native git operations (backed by libgit2) ----
+    /// Show working tree status
+    Status,
+    /// Show commit history
+    Log {
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Show changes (working tree by default, or staged with --staged)
+    Diff {
+        #[arg(long)]
+        staged: bool,
+    },
+    /// List, create, or delete branches
+    Branch {
+        /// Create a branch with this name
+        #[arg(long)]
+        create: Option<String>,
+        /// Delete a branch with this name
+        #[arg(long)]
+        delete: Option<String>,
+    },
+    /// Switch to a branch or revision
+    Checkout { refname: String },
+    /// Stage files (defaults to all changes)
+    Add { paths: Vec<String> },
+    /// Record staged changes
+    Commit {
+        #[arg(short = 'm', long)]
+        message: String,
+    },
+    /// Download objects/refs from a remote
+    Fetch {
+        #[arg(default_value = "origin")]
+        remote: String,
+    },
+    /// Fetch and fast-forward the current branch
+    Pull {
+        #[arg(default_value = "origin")]
+        remote: String,
+    },
+    /// Upload the current (or given) branch to a remote
+    Push {
+        #[arg(default_value = "origin")]
+        remote: String,
+        branch: Option<String>,
+    },
+    /// Clone a repository by URL
+    Clone { url: String, dir: Option<String> },
+    /// Stash uncommitted changes
+    Stash {
+        #[command(subcommand)]
+        cmd: gitcmd::StashCommand,
+    },
+    /// List, create, or delete tags
+    Tag {
+        /// Create a tag with this name
+        #[arg(long)]
+        create: Option<String>,
+        /// Annotate the created tag with this message (implies an annotated, not lightweight, tag)
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        /// Delete a tag with this name
+        #[arg(long)]
+        delete: Option<String>,
+    },
+    /// List, add, or remove remotes
+    Remote {
+        #[command(subcommand)]
+        cmd: gitcmd::RemoteCommand,
+    },
+    /// Reset the current branch to a revision
+    Reset {
+        /// soft (keep changes staged), mixed (keep changes unstaged), or hard (discard changes)
+        #[arg(long, default_value = "mixed", value_parser = ["soft", "mixed", "hard"])]
+        mode: String,
+        #[arg(default_value = "HEAD")]
+        target: String,
     },
 }
 
@@ -72,19 +159,39 @@ fn run() -> Result<()> {
     };
 
     match command {
-        Command::Auth { cmd } => auth::run(cmd),
-        Command::Git { cmd } => git_cmd::run(cmd),
-        other => {
-            // Every other command group needs a GitHub API client.
-            let token = config::Config::resolve_token()?;
-            let client = api::Client::new(token)?;
-            match other {
-                Command::Repo { cmd } => repo::run(&client, cmd),
-                Command::Pr { cmd } => pr::run(&client, cmd),
-                Command::Issue { cmd } => issue::run(&client, cmd),
-                Command::Auth { .. } | Command::Git { .. } => unreachable!(),
-            }
-        }
+        Command::Auth { cmd } => return auth::run(cmd),
+        Command::Status => return gitcmd::status(),
+        Command::Log { limit } => return gitcmd::log(limit),
+        Command::Diff { staged } => return gitcmd::diff(staged),
+        Command::Branch { create, delete } => return gitcmd::branch(create, delete),
+        Command::Checkout { refname } => return gitcmd::checkout(&refname),
+        Command::Add { paths } => return gitcmd::add(paths),
+        Command::Commit { message } => return gitcmd::commit(&message),
+        Command::Fetch { remote } => return gitcmd::fetch(&remote),
+        Command::Pull { remote } => return gitcmd::pull(&remote),
+        Command::Push { remote, branch } => return gitcmd::push(&remote, branch.as_deref()),
+        Command::Clone { url, dir } => return gitcmd::clone(&url, dir.as_deref()),
+        Command::Stash { cmd } => return gitcmd::stash(cmd),
+        Command::Tag {
+            create,
+            message,
+            delete,
+        } => return gitcmd::tag(create, message, delete),
+        Command::Remote { cmd } => return gitcmd::remote(cmd),
+        Command::Reset { mode, target } => return gitcmd::reset(&mode, &target),
+        _ => {}
+    }
+
+    // Everything else needs a GitHub API client.
+    let token = config::Config::resolve_token()?;
+    let client = api::Client::new(token)?;
+    match command {
+        Command::Repo { cmd } => repo::run(&client, cmd),
+        Command::Pr { cmd } => pr::run(&client, cmd),
+        Command::Issue { cmd } => issue::run(&client, cmd),
+        Command::Run { cmd } => runcmd::run(&client, cmd),
+        Command::Raw { spec, git_ref } => repo::raw(&client, &spec, git_ref),
+        _ => unreachable!(),
     }
 }
 
@@ -92,8 +199,24 @@ fn print_tree() {
     use clap::CommandFactory;
     use colored::Colorize;
 
-    println!("{} {}", "ghx".bold().green(), format!("v{}", env!("CARGO_PKG_VERSION")).dimmed());
-    println!("{}", "A GitHub CLI, in Rust — no shelling out, ever.".dimmed());
+    // Tokyo Night Storm palette (no purple/magenta by request) — same
+    // family as the LazyVim/VS Code/JetBrains "storm" neon-dark themes.
+    let comment = (86, 95, 137); // #565f89 muted/dim
+    let cyan = (125, 207, 255); // #7dcfff
+    let teal = (115, 218, 202); // #73daca
+    let green = (158, 206, 106); // #9ece6a
+    let orange = (224, 175, 104); // #e0af68
+
+    println!(
+        "{} {}",
+        "ghx".truecolor(teal.0, teal.1, teal.2).bold(),
+        format!("v{}", env!("CARGO_PKG_VERSION")).truecolor(comment.0, comment.1, comment.2)
+    );
+    println!(
+        "{}",
+        "A fast, native GitHub and git CLI."
+            .truecolor(comment.0, comment.1, comment.2)
+    );
     println!();
 
     let cmd = Cli::command();
@@ -103,15 +226,35 @@ fn print_tree() {
     for (i, sub) in subcommands.iter().enumerate() {
         let is_last_top = i + 1 == count;
         let branch = if is_last_top { "└─" } else { "├─" };
+        let children: Vec<_> = sub.get_subcommands().collect();
+
+        if children.is_empty() {
+            // Leaf top-level command (most native git ops): show its own args.
+            let args = format_args(sub);
+            println!(
+                "{} {} {}  {}",
+                branch.truecolor(comment.0, comment.1, comment.2),
+                sub.get_name().truecolor(green.0, green.1, green.2).bold(),
+                args.truecolor(orange.0, orange.1, orange.2),
+                sub.get_about()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default()
+                    .truecolor(comment.0, comment.1, comment.2)
+            );
+            continue;
+        }
+
         println!(
             "{} {}  {}",
-            branch.dimmed(),
-            sub.get_name().bold().cyan(),
-            sub.get_about().map(|s| s.to_string()).unwrap_or_default().dimmed()
+            branch.truecolor(comment.0, comment.1, comment.2),
+            sub.get_name().truecolor(cyan.0, cyan.1, cyan.2).bold(),
+            sub.get_about()
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+                .truecolor(comment.0, comment.1, comment.2)
         );
 
         let prefix = if is_last_top { "   " } else { "│  " };
-        let children: Vec<_> = sub.get_subcommands().collect();
         let child_count = children.len();
 
         for (j, child) in children.iter().enumerate() {
@@ -121,16 +264,25 @@ fn print_tree() {
             let args = format_args(child);
             println!(
                 "{prefix}{} {} {}  {}",
-                child_branch.dimmed(),
-                child.get_name().yellow(),
-                args.dimmed(),
-                child.get_about().map(|s| s.to_string()).unwrap_or_default().dimmed()
+                child_branch.truecolor(comment.0, comment.1, comment.2),
+                child.get_name().truecolor(green.0, green.1, green.2),
+                args.truecolor(orange.0, orange.1, orange.2),
+                child
+                    .get_about()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default()
+                    .truecolor(comment.0, comment.1, comment.2)
             );
         }
     }
 
     println!();
-    println!("{}", "Run `ghx <command> <subcommand> --help` for full details on any subcommand.".dimmed());
+    println!(
+        "{}",
+        "Run `ghx <command> [subcommand] --help` for full details on any command."
+            .truecolor(comment.0, comment.1, comment.2)
+            .italic()
+    );
 }
 
 fn format_args(cmd: &clap::Command) -> String {
