@@ -23,10 +23,17 @@
 #   -Channel        stable (default) | beta | dev
 #   -LocalBinary    path to an already-built ghx.exe to install instead of
 #                   downloading a release (for building from source)
+#   -GrantTo        user (DOMAIN\name or name) to add to _GHXmaintenance.
+#                   Defaults to whoever is running the installer — but when
+#                   this runs as NT AUTHORITY\SYSTEM (a deployment tool or
+#                   scheduled task), that default is useless, since nobody
+#                   logs in as SYSTEM. In that case, pass the real target
+#                   user explicitly, e.g. -GrantTo "CONTOSO\jsmith".
 
 param(
     [string]$Channel = "stable",
-    [string]$LocalBinary = ""
+    [string]$LocalBinary = "",
+    [string]$GrantTo = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -93,9 +100,33 @@ if (-not (Get-LocalGroup -Name $GroupName -ErrorAction SilentlyContinue)) {
     New-LocalGroup -Name $GroupName -Description "Can update/uninstall ghx without elevation" | Out-Null
 }
 
-$currentUser = "$env:USERDOMAIN\$env:USERNAME"
-if (-not (Get-LocalGroupMember -Group $GroupName -Member $currentUser -ErrorAction SilentlyContinue)) {
-    Add-LocalGroupMember -Group $GroupName -Member $currentUser
+$grantUser = $GrantTo
+if (-not $grantUser) {
+    if ("$env:USERNAME" -eq "SYSTEM") {
+        # Running as NT AUTHORITY\SYSTEM (a deployment tool or scheduled
+        # task) with no -GrantTo given — fall back to whoever owns the
+        # explorer.exe process, i.e. the actual interactive user, if one
+        # is logged on.
+        $explorer = Get-CimInstance Win32_Process -Filter "Name = 'explorer.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($explorer) {
+            $owner = Invoke-CimMethod -InputObject $explorer -MethodName GetOwner
+            if ($owner.ReturnValue -eq 0) {
+                $grantUser = "$($owner.Domain)\$($owner.User)"
+            }
+        }
+    } else {
+        $grantUser = "$env:USERDOMAIN\$env:USERNAME"
+    }
+}
+
+if ($grantUser) {
+    if (-not (Get-LocalGroupMember -Group $GroupName -Member $grantUser -ErrorAction SilentlyContinue)) {
+        Add-LocalGroupMember -Group $GroupName -Member $grantUser
+    }
+} else {
+    Write-Host "==> Running as SYSTEM with no logged-on user found and no -GrantTo given." -ForegroundColor Yellow
+    Write-Host "    Nobody was added to '$GroupName' — add the intended user yourself:" -ForegroundColor Yellow
+    Write-Host "        Add-LocalGroupMember -Group $GroupName -Member <DOMAIN\user>" -ForegroundColor Yellow
 }
 
 $acl = Get-Acl $GhxHome
@@ -105,5 +136,8 @@ $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
 $acl.AddAccessRule($rule)
 Set-Acl $GhxHome $acl
 
-Write-Host "==> $GhxHome is group-writable by '$GroupName' (you've been added to it)." -ForegroundColor Cyan
+Write-Host "==> $GhxHome is group-writable by '$GroupName'." -ForegroundColor Cyan
+if ($grantUser) {
+    Write-Host "    $grantUser was added to it." -ForegroundColor Cyan
+}
 Write-Host "==> Installed: $TargetExe" -ForegroundColor Green
