@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod git;
 mod lfs;
+mod tui;
 mod uninstall;
 mod update;
 
@@ -77,6 +78,11 @@ enum Command {
         spec: String,
         #[arg(long = "ref")]
         git_ref: Option<String>,
+    },
+    /// Launch the interactive TUI (all panels, or one standalone panel)
+    Tui {
+        #[command(subcommand)]
+        panel: Option<TuiPanel>,
     },
 
     // ---- native git operations (backed by libgit2) ----
@@ -174,6 +180,19 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum TuiPanel {
+    /// Pull request list + detail panel only
+    Prs,
+    /// Diff viewer panel only (working tree diff)
+    Diff {
+        #[arg(long)]
+        staged: bool,
+    },
+    /// Branch switcher panel only
+    Branches,
+}
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("error: {e:#}");
@@ -234,6 +253,7 @@ fn run() -> Result<()> {
         Command::Reset { mode, target } => return gitcmd::reset(&mode, &target),
         Command::Merge { branch } => return gitcmd::merge(&branch),
         Command::Lfs { cmd } => return lfscmd::run(cmd),
+        Command::Tui { panel } => return run_tui(panel),
         _ => {}
     }
 
@@ -251,6 +271,59 @@ fn run() -> Result<()> {
         Command::Notifications { cmd } => notifications::run(&client, cmd),
         _ => unreachable!(),
     }
+}
+
+/// Builds and runs the panel set for `ghx tui`. `None` launches the full
+/// composed desktop mode (every panel that has what it needs to run);
+/// `Some(panel)` launches just that one panel standalone. Both paths go
+/// through the same `tui::App`, so a standalone panel is not a special case
+/// of the framework — it's the framework with a panel list of length 1.
+fn run_tui(panel: Option<TuiPanel>) -> Result<()> {
+    if !tui::is_interactive() {
+        eprintln!("ghx tui requires an interactive terminal");
+        std::process::exit(1);
+    }
+
+    let panels: Vec<Box<dyn tui::Panel>> = match panel {
+        Some(TuiPanel::Prs) => {
+            let token = config::Config::resolve_token()?;
+            let client = api::Client::new(token)?;
+            let repo = git::GhRepo::detect()?;
+            vec![Box::new(tui::PrsPanel::new(client, repo.owner, repo.name))]
+        }
+        Some(TuiPanel::Diff { staged }) => {
+            let diff_text = git::diff(staged)?;
+            vec![Box::new(tui::DiffPanel::new(&diff_text))]
+        }
+        Some(TuiPanel::Branches) => {
+            vec![Box::new(tui::BranchesPanel::new())]
+        }
+        None => {
+            let mut panels: Vec<Box<dyn tui::Panel>> = Vec::new();
+
+            if let (Ok(Some(token)), Ok(repo)) =
+                (config::Config::resolve_token(), git::GhRepo::detect())
+            {
+                if let Ok(client) = api::Client::new(Some(token)) {
+                    panels.push(Box::new(tui::PrsPanel::new(client, repo.owner, repo.name)));
+                }
+            }
+
+            let diff_text = git::diff(false).unwrap_or_default();
+            panels.push(Box::new(tui::DiffPanel::new(&diff_text)));
+            panels.push(Box::new(tui::BranchesPanel::new()));
+            panels
+        }
+    };
+
+    if panels.is_empty() {
+        anyhow::bail!(
+            "nothing to show — not in a git repository and no GitHub token configured \
+             (run `ghx auth login` first, or run `ghx tui` inside a git repo)"
+        );
+    }
+
+    tui::App::new(panels).run()
 }
 
 fn print_tree() {
