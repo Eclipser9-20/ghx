@@ -2,7 +2,7 @@ use crate::api::Client;
 use crate::git::{self, GhRepo};
 use anyhow::Result;
 use colored::Colorize;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 #[derive(clap::Subcommand)]
 pub enum RepoCommand {
@@ -22,6 +22,20 @@ pub enum RepoCommand {
     List {
         #[arg(long, default_value_t = 30)]
         limit: u32,
+    },
+    /// Create a new repository
+    Create {
+        /// Repository name, or owner/name to create under an org
+        name: String,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        private: bool,
+    },
+    /// Delete a repository (requires typing the full owner/repo to confirm)
+    Delete {
+        /// owner/repo — must be given in full, no default-to-current-dir, as a safety measure
+        repo: String,
     },
 }
 
@@ -68,6 +82,12 @@ pub fn run(client: &Client, cmd: RepoCommand) -> Result<()> {
         RepoCommand::View { repo } => view(client, repo),
         RepoCommand::Clone { repo, dir } => clone(&repo, dir),
         RepoCommand::List { limit } => list(client, limit),
+        RepoCommand::Create {
+            name,
+            description,
+            private,
+        } => create(client, &name, description, private),
+        RepoCommand::Delete { repo } => delete(client, &repo),
     }
 }
 
@@ -105,6 +125,40 @@ fn clone(repo: &str, dir: Option<String>) -> Result<()> {
     let (owner, name) = git::parse_slug(repo)?;
     let url = format!("https://github.com/{owner}/{name}.git");
     git::clone(&url, dir.as_ref().map(std::path::Path::new))
+}
+
+fn create(client: &Client, name: &str, description: Option<String>, private: bool) -> Result<()> {
+    let body = json!({
+        "name": name,
+        "description": description.unwrap_or_default(),
+        "private": private,
+    });
+
+    let data: Value = if let Some((org, repo_name)) = name.split_once('/') {
+        client.post(
+            &format!("/orgs/{org}/repos"),
+            &json!({
+                "name": repo_name,
+                "description": body["description"],
+                "private": private,
+            }),
+        )?
+    } else {
+        client.post("/user/repos", &body)?
+    };
+
+    let full_name = data["full_name"].as_str().unwrap_or(name);
+    let url = data["html_url"].as_str().unwrap_or("");
+    println!("{} Created {}", "✓".green().bold(), full_name.bold());
+    println!("{}", url.underline());
+    Ok(())
+}
+
+fn delete(client: &Client, repo: &str) -> Result<()> {
+    let (owner, name) = git::parse_slug(repo)?;
+    client.delete(&format!("/repos/{owner}/{name}"))?;
+    println!("{} Deleted {}", "✓".green().bold(), repo);
+    Ok(())
 }
 
 fn list(client: &Client, limit: u32) -> Result<()> {
