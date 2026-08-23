@@ -1,0 +1,26 @@
+[package]
+name = "ghx"
+version = "0.1.0"
+edition = "2021"
+description = "A GitHub CLI (gh-compatible surface) with a nicer UX, written in Rust"
+license = "MIT"
+
+[[bin]]
+name = "ghx"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+dirs = "5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+colored = "2"
+open = "5"
+
+[profile.release]
+opt-level = 3
+lto = true
