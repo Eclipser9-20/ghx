@@ -61,10 +61,19 @@ pub fn stash(cmd: StashCommand) -> Result<()> {
     }
 }
 
-pub fn tag(create: Option<String>, message: Option<String>, delete: Option<String>) -> Result<()> {
+pub fn tag(
+    create: Option<String>,
+    message: Option<String>,
+    delete: Option<String>,
+    push: Option<String>,
+) -> Result<()> {
     if let Some(name) = create {
         git::tag_create(&name, message.as_deref())?;
         println!("{} Created tag {}", "✓".green().bold(), name.cyan());
+        if let Some(remote) = push {
+            git::push_tag(&remote, &name)?;
+            println!("{} Pushed tag {} to {}", "✓".green().bold(), name.cyan(), remote);
+        }
         return Ok(());
     }
     if let Some(name) = delete {
