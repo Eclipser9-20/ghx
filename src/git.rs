@@ -1,6 +1,5 @@
-//! Native git support via libgit2 (through the `git2` crate). GHX never
-//! shells out to a `git` binary — every operation here goes straight
-//! through libgit2, vendored and compiled in at build time.
+//! Native git operations, implemented on top of libgit2 (via the `git2`
+//! crate).
 
 use crate::config::Config;
 use anyhow::{bail, Context, Result};

@@ -20,13 +20,11 @@ dirs = "5"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 colored = "2"
 open = "5"
-# Vendored: builds libgit2 (+ OpenSSL where needed) from source at compile
-# time. No system libgit2/OpenSSL dependency on any platform — this is what
-# makes git operations "ours" rather than a shell-out to a `git` binary.
+# Vendored: builds libgit2 (+ OpenSSL where needed) from source, so there's
+# no system libgit2/OpenSSL dependency on any platform.
 git2 = { version = "0.19", features = ["vendored-libgit2", "vendored-openssl"] }
 # OS-native credential storage: Windows Credential Manager, macOS Keychain,
-# Linux Secret Service (libsecret) / kwallet. Real encryption-at-rest tied
-# to the OS login, not a DIY scheme.
+# Linux Secret Service (libsecret) / kwallet.
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 
 [profile.release]

@@ -25,6 +25,34 @@ pub enum RepoCommand {
     },
 }
 
+/// Print a file's contents from a repo, given "owner/repo/path/to/file"
+/// instead of a full raw.githubusercontent.com URL.
+pub fn raw(client: &Client, spec: &str, git_ref: Option<String>) -> Result<()> {
+    let mut parts = spec.splitn(3, '/');
+    let owner = parts.next().filter(|s| !s.is_empty());
+    let name = parts.next().filter(|s| !s.is_empty());
+    let path = parts.next().filter(|s| !s.is_empty());
+    let (Some(owner), Some(name), Some(path)) = (owner, name, path) else {
+        anyhow::bail!("expected \"owner/repo/path/to/file\", got \"{spec}\"");
+    };
+
+    let git_ref = match git_ref {
+        Some(r) => r,
+        None => {
+            let data: Value = client.get(&format!("/repos/{owner}/{name}"))?;
+            data["default_branch"]
+                .as_str()
+                .unwrap_or("main")
+                .to_string()
+        }
+    };
+
+    let url = format!("https://raw.githubusercontent.com/{owner}/{name}/{git_ref}/{path}");
+    let text = client.get_raw(&url, "*/*")?;
+    print!("{text}");
+    Ok(())
+}
+
 fn resolve(repo: Option<String>) -> Result<(String, String)> {
     match repo {
         Some(slug) => git::parse_slug(&slug),

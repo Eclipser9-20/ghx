@@ -122,7 +122,7 @@ fn view(client: &Client, repo: Option<String>, number: u64, diff: bool) -> Resul
     let (owner, name) = resolve(repo)?;
     if diff {
         let path = format!("/repos/{owner}/{name}/pulls/{number}");
-        let text = client_diff(client, &path)?;
+        let text = client.get_raw(&path, "application/vnd.github.diff")?;
         println!("{text}");
         return Ok(());
     }
@@ -155,23 +155,6 @@ fn view(client: &Client, repo: Option<String>, number: u64, diff: bool) -> Resul
     }
     println!("{}", url.underline());
     Ok(())
-}
-
-/// PR diffs need the `application/vnd.github.diff` accept header, which our
-/// generic JSON client isn't set up for, so build a one-off raw request.
-fn client_diff(client: &Client, path: &str) -> Result<String> {
-    let token = client.require_token().ok();
-    let http = reqwest::blocking::Client::builder()
-        .user_agent(concat!("ghx/", env!("CARGO_PKG_VERSION")))
-        .build()?;
-    let mut req = http
-        .get(format!("https://api.github.com{path}"))
-        .header("Accept", "application/vnd.github.diff");
-    if let Some(t) = token {
-        req = req.bearer_auth(t);
-    }
-    let resp = req.send().context("fetching diff")?;
-    Ok(resp.text().context("reading diff body")?)
 }
 
 #[allow(clippy::too_many_arguments)]

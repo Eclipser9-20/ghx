@@ -46,6 +46,23 @@ impl Client {
         req
     }
 
+    /// GET with a custom Accept header, returning the raw response body as
+    /// text. Used for endpoints that don't return JSON (diffs, Action
+    /// job logs).
+    pub fn get_raw(&self, path: &str, accept: &str) -> Result<String> {
+        let resp = self
+            .request(reqwest::Method::GET, path)
+            .header("Accept", accept)
+            .send()
+            .with_context(|| format!("GET {path}"))?;
+        let status = resp.status();
+        let text = resp.text().context("reading response body")?;
+        if !status.is_success() {
+            bail!("GitHub API error ({status}): {text}");
+        }
+        Ok(text)
+    }
+
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let resp = self
             .request(reqwest::Method::GET, path)
@@ -70,6 +87,21 @@ impl Client {
             .send()
             .with_context(|| format!("PATCH {path}"))?;
         Self::handle(resp)
+    }
+
+    /// POST with no request body, discarding the response body — for
+    /// action-trigger endpoints (rerun, cancel, etc.) that return 201/204.
+    pub fn post_empty(&self, path: &str) -> Result<()> {
+        let resp = self
+            .request(reqwest::Method::POST, path)
+            .send()
+            .with_context(|| format!("POST {path}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().unwrap_or_default();
+            bail!("POST {path} failed: {status}: {text}");
+        }
+        Ok(())
     }
 
     pub fn put_json<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
