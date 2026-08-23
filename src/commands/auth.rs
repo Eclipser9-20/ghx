@@ -146,10 +146,7 @@ fn save_and_verify(token: String) -> Result<()> {
         .unwrap_or("unknown")
         .to_string();
 
-    let mut cfg = Config::load()?;
-    cfg.token = Some(token);
-    cfg.username = Some(login.clone());
-    cfg.save()?;
+    Config::store_login(&login, &token)?;
 
     println!("{} Logged in as {}", "✓".green().bold(), login.bold());
     Ok(())
@@ -176,10 +173,7 @@ fn status() -> Result<()> {
 }
 
 fn logout() -> Result<()> {
-    let mut cfg = Config::load()?;
-    cfg.token = None;
-    cfg.username = None;
-    cfg.save()?;
+    Config::clear_login()?;
     println!("{} Logged out", "✓".green().bold());
     Ok(())
 }

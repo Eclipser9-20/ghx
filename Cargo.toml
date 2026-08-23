@@ -24,6 +24,10 @@ open = "5"
 # time. No system libgit2/OpenSSL dependency on any platform — this is what
 # makes git operations "ours" rather than a shell-out to a `git` binary.
 git2 = { version = "0.19", features = ["vendored-libgit2", "vendored-openssl"] }
+# OS-native credential storage: Windows Credential Manager, macOS Keychain,
+# Linux Secret Service (libsecret) / kwallet. Real encryption-at-rest tied
+# to the OS login, not a DIY scheme.
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 
 [profile.release]
 opt-level = 3
