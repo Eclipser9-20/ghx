@@ -30,6 +30,19 @@ impl Client {
         method: reqwest::Method,
         path: &str,
     ) -> reqwest::blocking::RequestBuilder {
+        self.request_accept(method, path, "application/vnd.github+json")
+    }
+
+    /// Like `request`, but with a caller-chosen Accept header instead of
+    /// the default `application/vnd.github+json` (reqwest's `.header()`
+    /// appends rather than replaces, so setting Accept twice would send
+    /// two values — this builds it fresh instead).
+    fn request_accept(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        accept: &str,
+    ) -> reqwest::blocking::RequestBuilder {
         let url = if path.starts_with("http") {
             path.to_string()
         } else {
@@ -38,7 +51,7 @@ impl Client {
         let mut req = self
             .http
             .request(method, url)
-            .header("Accept", "application/vnd.github+json")
+            .header("Accept", accept)
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(token) = &self.token {
             req = req.bearer_auth(token);
@@ -50,8 +63,7 @@ impl Client {
     /// bytes. Used for binary downloads (release assets).
     pub fn get_bytes(&self, path: &str, accept: &str) -> Result<Vec<u8>> {
         let resp = self
-            .request(reqwest::Method::GET, path)
-            .header("Accept", accept)
+            .request_accept(reqwest::Method::GET, path, accept)
             .send()
             .with_context(|| format!("GET {path}"))?;
         let status = resp.status();
@@ -66,8 +78,7 @@ impl Client {
     /// job logs).
     pub fn get_raw(&self, path: &str, accept: &str) -> Result<String> {
         let resp = self
-            .request(reqwest::Method::GET, path)
-            .header("Accept", accept)
+            .request_accept(reqwest::Method::GET, path, accept)
             .send()
             .with_context(|| format!("GET {path}"))?;
         let status = resp.status();
