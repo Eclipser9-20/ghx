@@ -90,7 +90,11 @@ fn credentials_callback<'a>() -> impl FnMut(
     move |_url, username_from_url, allowed| {
         if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) {
             if let Some(t) = &token {
-                return Cred::userpass_plaintext(t, "x-oauth-basic");
+                // Fine-grained PATs (and GitHub Apps tokens) reject the
+                // classic "token-as-username" convention with a 403 —
+                // the token must be the password, with any non-empty
+                // username.
+                return Cred::userpass_plaintext("x-access-token", t);
             }
         }
         if allowed.contains(CredentialType::SSH_KEY) {
@@ -225,8 +229,38 @@ pub fn diff(staged: bool) -> Result<String> {
     Ok(String::from_utf8_lossy(&buf).to_string())
 }
 
+/// Files whose whole-file replacement is handled elsewhere (LFS pointer
+/// swap) rather than via a plain working-tree read. Checked before falling
+/// back to a normal `index.add_path`/`add_all`.
+fn stage_lfs_aware(repo: &Repository, rel_path: &Path) -> Result<bool> {
+    crate::lfs::stage_path(repo, rel_path)
+}
+
 pub fn add_all() -> Result<()> {
     let repo = open_current()?;
+
+    // LFS-tracked paths get pointer-swapped individually; everything else
+    // goes through the normal bulk add.
+    let has_lfs_patterns = !crate::lfs::tracked_patterns()?.is_empty();
+    if has_lfs_patterns {
+        for (code, path) in status()? {
+            let rel = Path::new(&path);
+            if code == "deleted" {
+                let mut index = repo.index()?;
+                index.remove_path(rel).ok();
+                index.write()?;
+                continue;
+            }
+            if stage_lfs_aware(&repo, rel)? {
+                continue;
+            }
+            let mut index = repo.index()?;
+            index.add_path(rel).with_context(|| format!("adding {path}"))?;
+            index.write()?;
+        }
+        return Ok(());
+    }
+
     let mut index = repo.index()?;
     index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
     index.write()?;
@@ -235,13 +269,17 @@ pub fn add_all() -> Result<()> {
 
 pub fn add(paths: &[String]) -> Result<()> {
     let repo = open_current()?;
-    let mut index = repo.index()?;
     for p in paths {
+        let rel = Path::new(p);
+        if stage_lfs_aware(&repo, rel)? {
+            continue;
+        }
+        let mut index = repo.index()?;
         index
-            .add_path(Path::new(p))
+            .add_path(rel)
             .with_context(|| format!("adding {p}"))?;
+        index.write()?;
     }
-    index.write()?;
     Ok(())
 }
 
