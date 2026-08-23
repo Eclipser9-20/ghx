@@ -5,6 +5,7 @@ use serde_json::Value;
 const API_BASE: &str = "https://api.github.com";
 const USER_AGENT: &str = concat!("ghx/", env!("CARGO_PKG_VERSION"));
 
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::blocking::Client,
     token: Option<String>,
@@ -95,6 +96,41 @@ impl Client {
             .send()
             .with_context(|| format!("GET {path}"))?;
         Self::handle(resp)
+    }
+
+    /// GET returning the raw status code alongside the parsed JSON body (or
+    /// `Value::Null` when the body is empty). Used where a non-2xx status
+    /// (e.g. 404) is a meaningful result rather than an error, such as
+    /// checking branch protection on an unprotected branch.
+    pub fn get_status(&self, path: &str) -> Result<(u16, Value)> {
+        let resp = self
+            .request(reqwest::Method::GET, path)
+            .send()
+            .with_context(|| format!("GET {path}"))?;
+        let status = resp.status().as_u16();
+        let text = resp.text().context("reading response body")?;
+        let value = if text.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&text)
+                .with_context(|| format!("parsing GitHub API response: {text}"))?
+        };
+        Ok((status, value))
+    }
+
+    /// GET returning the parsed JSON body along with response headers, so
+    /// callers can inspect things like `X-Poll-Interval`.
+    pub fn get_with_headers<T: DeserializeOwned>(
+        &self,
+        path: &str,
+    ) -> Result<(T, reqwest::header::HeaderMap)> {
+        let resp = self
+            .request(reqwest::Method::GET, path)
+            .send()
+            .with_context(|| format!("GET {path}"))?;
+        let headers = resp.headers().clone();
+        let value = Self::handle(resp)?;
+        Ok((value, headers))
     }
 
     pub fn post<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {

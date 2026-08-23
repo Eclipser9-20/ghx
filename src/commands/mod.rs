@@ -1,6 +1,10 @@
 pub mod auth;
 pub mod git;
 pub mod issue;
+pub mod lfs;
+pub mod notifications;
+pub mod org;
 pub mod pr;
 pub mod repo;
 pub mod run;
+pub mod webhook;
