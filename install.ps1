@@ -7,9 +7,17 @@
 #   %APPDATA%\ghx\                     per-user config (unchanged — this
 #                                       is where ghx already reads/writes it)
 #
-# Requires an elevated (Administrator) PowerShell, since Program Files is
-# only writable by Administrators by default — the same reason a later
-# `ghx --update` also needs to be run elevated.
+# Requires an elevated (Administrator) PowerShell to install, since
+# Program Files is only writable by Administrators by default. To let
+# `ghx --update`/`--uninstall` work afterward WITHOUT elevation, this
+# installer creates a local group "_GHXmaintenance" and grants it Modify
+# rights on the install directory specifically (not Program Files as a
+# whole) — the same "owner has full control, group can update, everyone
+# else read+execute only" model as install.sh's Unix group, just via an
+# NTFS ACL instead of POSIX permission bits. Add another user to that
+# group (Computer Management > Local Users and Groups, or
+# `Add-LocalGroupMember -Group _GHXmaintenance -Member <user>`) to let
+# them update/uninstall without an admin prompt too.
 #
 # Params:
 #   -Channel        stable (default) | beta | dev
@@ -80,4 +88,22 @@ if (($machinePath -split ';') -notcontains $BinDir) {
     Write-Host "==> Added $BinDir to the system PATH (restart your terminal to pick it up)." -ForegroundColor Yellow
 }
 
+$GroupName = "_GHXmaintenance"
+if (-not (Get-LocalGroup -Name $GroupName -ErrorAction SilentlyContinue)) {
+    New-LocalGroup -Name $GroupName -Description "Can update/uninstall ghx without elevation" | Out-Null
+}
+
+$currentUser = "$env:USERDOMAIN\$env:USERNAME"
+if (-not (Get-LocalGroupMember -Group $GroupName -Member $currentUser -ErrorAction SilentlyContinue)) {
+    Add-LocalGroupMember -Group $GroupName -Member $currentUser
+}
+
+$acl = Get-Acl $GhxHome
+$rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+    $GroupName, "Modify", "ContainerInherit,ObjectInherit", "None", "Allow"
+)
+$acl.AddAccessRule($rule)
+Set-Acl $GhxHome $acl
+
+Write-Host "==> $GhxHome is group-writable by '$GroupName' (you've been added to it)." -ForegroundColor Cyan
 Write-Host "==> Installed: $TargetExe" -ForegroundColor Green
