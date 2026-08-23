@@ -58,6 +58,66 @@ pub enum GitCommand {
         url: String,
         dir: Option<String>,
     },
+    /// Stash uncommitted changes
+    Stash {
+        #[command(subcommand)]
+        cmd: StashCommand,
+    },
+    /// List, create, or delete tags
+    Tag {
+        /// Create a tag with this name
+        #[arg(long)]
+        create: Option<String>,
+        /// Annotate the created tag with this message (implies an annotated, not lightweight, tag)
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        /// Delete a tag with this name
+        #[arg(long)]
+        delete: Option<String>,
+    },
+    /// List, add, or remove remotes
+    Remote {
+        #[command(subcommand)]
+        cmd: RemoteCommand,
+    },
+    /// Reset the current branch to a revision
+    Reset {
+        /// soft (keep changes staged), mixed (keep changes unstaged), or hard (discard changes)
+        #[arg(long, default_value = "mixed", value_parser = ["soft", "mixed", "hard"])]
+        mode: String,
+        #[arg(default_value = "HEAD")]
+        target: String,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum StashCommand {
+    /// Save uncommitted changes and revert the working tree
+    Save {
+        message: Option<String>,
+    },
+    /// List saved stashes
+    List,
+    /// Apply and remove a stash (defaults to the most recent)
+    Pop {
+        #[arg(default_value_t = 0)]
+        index: usize,
+    },
+    /// Remove a stash without applying it (defaults to the most recent)
+    Drop {
+        #[arg(default_value_t = 0)]
+        index: usize,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum RemoteCommand {
+    /// List configured remotes
+    List,
+    /// Add a remote
+    Add { name: String, url: String },
+    /// Remove a remote
+    Remove { name: String },
 }
 
 pub fn run(cmd: GitCommand) -> Result<()> {
@@ -90,6 +150,87 @@ pub fn run(cmd: GitCommand) -> Result<()> {
         }
         GitCommand::Clone { url, dir } => {
             git::clone(&url, dir.as_ref().map(std::path::Path::new))
+        }
+        GitCommand::Stash { cmd } => stash(cmd),
+        GitCommand::Tag {
+            create,
+            message,
+            delete,
+        } => tag(create, message, delete),
+        GitCommand::Remote { cmd } => remote(cmd),
+        GitCommand::Reset { mode, target } => {
+            git::reset(&mode, &target)?;
+            println!("{} Reset ({}) to {}", "✓".green().bold(), mode, target.cyan());
+            Ok(())
+        }
+    }
+}
+
+fn stash(cmd: StashCommand) -> Result<()> {
+    match cmd {
+        StashCommand::Save { message } => {
+            git::stash_save(message.as_deref())?;
+            println!("{} Stashed changes", "✓".green().bold());
+            Ok(())
+        }
+        StashCommand::List => {
+            let entries = git::stash_list()?;
+            if entries.is_empty() {
+                println!("{}", "no stashes".dimmed());
+                return Ok(());
+            }
+            for e in entries {
+                println!("{} {}", format!("stash@{{{}}}", e.index).yellow(), e.message);
+            }
+            Ok(())
+        }
+        StashCommand::Pop { index } => {
+            git::stash_pop(index)?;
+            println!("{} Popped stash@{{{index}}}", "✓".green().bold());
+            Ok(())
+        }
+        StashCommand::Drop { index } => {
+            git::stash_drop(index)?;
+            println!("{} Dropped stash@{{{index}}}", "✓".green().bold());
+            Ok(())
+        }
+    }
+}
+
+fn tag(create: Option<String>, message: Option<String>, delete: Option<String>) -> Result<()> {
+    if let Some(name) = create {
+        git::tag_create(&name, message.as_deref())?;
+        println!("{} Created tag {}", "✓".green().bold(), name.cyan());
+        return Ok(());
+    }
+    if let Some(name) = delete {
+        git::tag_delete(&name)?;
+        println!("{} Deleted tag {}", "✓".green().bold(), name.cyan());
+        return Ok(());
+    }
+    for name in git::tag_list()? {
+        println!("{name}");
+    }
+    Ok(())
+}
+
+fn remote(cmd: RemoteCommand) -> Result<()> {
+    match cmd {
+        RemoteCommand::List => {
+            for (name, url) in git::remote_list()? {
+                println!("{:<15} {}", name.cyan(), url);
+            }
+            Ok(())
+        }
+        RemoteCommand::Add { name, url } => {
+            git::remote_add(&name, &url)?;
+            println!("{} Added remote {}", "✓".green().bold(), name.cyan());
+            Ok(())
+        }
+        RemoteCommand::Remove { name } => {
+            git::remote_remove(&name)?;
+            println!("{} Removed remote {}", "✓".green().bold(), name.cyan());
+            Ok(())
         }
     }
 }
