@@ -4,12 +4,16 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-/// Non-secret settings only. The auth token itself never touches disk in
-/// plaintext — it lives in the OS credential store (Windows Credential
-/// Manager / macOS Keychain / Linux Secret Service), keyed by username.
+/// Non-secret settings. The auth token normally lives in the OS credential
+/// store (Windows Credential Manager / macOS Keychain / Linux Secret
+/// Service), keyed by username — `token_fallback` is only populated when
+/// that store isn't reachable (e.g. a headless Linux box with no D-Bus
+/// session), so login still works rather than hard-failing.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_fallback: Option<String>,
 }
 
 const KEYRING_SERVICE: &str = "ghx";
@@ -49,15 +53,28 @@ impl Config {
     }
 
     /// Save a successful login: the token goes into the OS credential
-    /// store, only the (non-secret) username is written to disk.
+    /// store when one is reachable, otherwise it's kept in the plaintext
+    /// config as a fallback (with a warning) so login still succeeds on
+    /// systems with no secret-service backend.
     pub fn store_login(username: &str, token: &str) -> Result<()> {
-        keyring_entry(username)?
-            .set_password(token)
-            .context("saving token to the OS credential store")?;
-        Config {
-            username: Some(username.to_string()),
+        match keyring_entry(username)?.set_password(token) {
+            Ok(()) => Config {
+                username: Some(username.to_string()),
+                token_fallback: None,
+            }
+            .save(),
+            Err(e) => {
+                eprintln!(
+                    "warning: could not use the OS credential store ({e}); \
+                     storing the token in plaintext at the ghx config file instead"
+                );
+                Config {
+                    username: Some(username.to_string()),
+                    token_fallback: Some(token.to_string()),
+                }
+                .save()
+            }
         }
-        .save()
     }
 
     /// Forget the current login: removes the cached credential and clears
@@ -75,7 +92,8 @@ impl Config {
     /// Resolve the token to use: env vars take precedence over the cached
     /// login, matching gh's own GH_TOKEN/GITHUB_TOKEN precedence
     /// convention. Falls back to the OS credential store entry for the
-    /// last logged-in username.
+    /// last logged-in username, or the plaintext fallback if that's what
+    /// login had to use.
     pub fn resolve_token() -> Result<Option<String>> {
         for var in ["GHX_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] {
             if let Ok(t) = std::env::var(var) {
@@ -85,7 +103,11 @@ impl Config {
             }
         }
 
-        let Some(username) = Self::load()?.username else {
+        let cfg = Self::load()?;
+        if let Some(token) = cfg.token_fallback {
+            return Ok(Some(token));
+        }
+        let Some(username) = cfg.username else {
             return Ok(None);
         };
         match keyring_entry(&username)?.get_password() {
