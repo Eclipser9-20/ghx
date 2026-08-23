@@ -1,5 +1,5 @@
 use crate::api::Client;
-use crate::gitutil::{self, Repo};
+use crate::git::{self, GhRepo};
 use anyhow::{Context, Result};
 use colored::Colorize;
 use serde_json::{json, Value};
@@ -66,9 +66,9 @@ pub enum PrCommand {
 
 fn resolve(repo: Option<String>) -> Result<(String, String)> {
     match repo {
-        Some(slug) => gitutil::parse_slug(&slug),
+        Some(slug) => git::parse_slug(&slug),
         None => {
-            let r = Repo::detect()?;
+            let r = GhRepo::detect()?;
             Ok((r.owner, r.name))
         }
     }
@@ -198,8 +198,7 @@ fn create(
     };
     let head = match head {
         Some(h) => h,
-        None => gitutil::run_capture(&["rev-parse", "--abbrev-ref", "HEAD"])
-            .context("could not determine current branch")?,
+        None => git::current_branch().context("could not determine current branch")?,
     };
 
     let payload = json!({
@@ -228,18 +227,14 @@ fn checkout(client: &Client, repo: Option<String>, number: u64) -> Result<()> {
     let head_repo_full = pr["head"]["repo"]["full_name"].as_str().unwrap_or("");
 
     let local_branch = format!("pr-{number}");
-    if head_repo_full == format!("{owner}/{name}") {
-        // Same-repo branch: fetch and check out directly.
-        gitutil::run_inherit(&["fetch", "origin", &format!("{head_ref}:{local_branch}")])?;
+    let remote_ref = if head_repo_full == format!("{owner}/{name}") {
+        // Same-repo branch: fetch it directly.
+        format!("refs/heads/{head_ref}")
     } else {
         // Fork PR: fetch via the special pull/<n>/head ref.
-        gitutil::run_inherit(&[
-            "fetch",
-            "origin",
-            &format!("pull/{number}/head:{local_branch}"),
-        ])?;
-    }
-    gitutil::run_inherit(&["checkout", &local_branch])
+        format!("refs/pull/{number}/head")
+    };
+    git::fetch_ref_as_branch("origin", &remote_ref, &local_branch)
 }
 
 fn merge(client: &Client, repo: Option<String>, number: u64, method: &str) -> Result<()> {
