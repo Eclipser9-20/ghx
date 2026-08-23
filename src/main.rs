@@ -359,11 +359,18 @@ fn print_tree() {
         let branch = if is_last_top { "└─" } else { "├─" };
         let children: Vec<_> = sub.get_subcommands().collect();
 
+        // Every character on the line gets an explicit color, including
+        // separator spaces — a plain (uncolored) cell renders as an
+        // opaque default background in Windows Terminal, which shows up
+        // as visible white/grey banding against a transparent background.
+        let sp = " ".truecolor(comment.0, comment.1, comment.2);
+        let sp2 = "  ".truecolor(comment.0, comment.1, comment.2);
+
         if children.is_empty() {
             // Leaf top-level command (most native git ops): show its own args.
             let args = format_args(sub);
             println!(
-                "{} {} {}  {}",
+                "{}{sp}{}{sp}{}{sp2}{}",
                 branch.truecolor(comment.0, comment.1, comment.2),
                 sub.get_name().truecolor(green.0, green.1, green.2).bold(),
                 args.truecolor(orange.0, orange.1, orange.2),
@@ -376,7 +383,7 @@ fn print_tree() {
         }
 
         println!(
-            "{} {}  {}",
+            "{}{sp}{}{sp2}{}",
             branch.truecolor(comment.0, comment.1, comment.2),
             sub.get_name().truecolor(cyan.0, cyan.1, cyan.2).bold(),
             sub.get_about()
@@ -385,7 +392,8 @@ fn print_tree() {
                 .truecolor(comment.0, comment.1, comment.2)
         );
 
-        let prefix = if is_last_top { "   " } else { "│  " };
+        let prefix = (if is_last_top { "   " } else { "│  " })
+            .truecolor(comment.0, comment.1, comment.2);
         let child_count = children.len();
 
         for (j, child) in children.iter().enumerate() {
@@ -394,7 +402,7 @@ fn print_tree() {
 
             let args = format_args(child);
             println!(
-                "{prefix}{} {} {}  {}",
+                "{prefix}{}{sp}{}{sp}{}{sp2}{}",
                 child_branch.truecolor(comment.0, comment.1, comment.2),
                 child.get_name().truecolor(green.0, green.1, green.2),
                 args.truecolor(orange.0, orange.1, orange.2),

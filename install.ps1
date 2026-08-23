@@ -135,8 +135,10 @@ if (-not $grantUser) {
 }
 
 if ($grantUser) {
-    if (-not (Get-LocalGroupMember -Group $GroupName -Member $grantUser -ErrorAction SilentlyContinue)) {
-        Add-LocalGroupMember -Group $GroupName -Member $grantUser
+    try {
+        Add-LocalGroupMember -Group $GroupName -Member $grantUser -ErrorAction Stop
+    } catch [Microsoft.PowerShell.Commands.MemberExistsException] {
+        # Already a member — fine, nothing to do.
     }
 } else {
     Write-Host "==> Running as SYSTEM with no logged-on user found and no -GrantTo given." -ForegroundColor Yellow
