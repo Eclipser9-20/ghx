@@ -206,30 +206,46 @@ fn view(client: &Client, repo: Option<String>, run_id: u64) -> Result<()> {
 fn logs(client: &Client, repo: Option<String>, run_id: u64, job: Option<u64>) -> Result<()> {
     let (owner, name) = resolve(repo)?;
 
-    let job_ids: Vec<u64> = match job {
-        Some(j) => vec![j],
-        None => {
-            let jobs: Value = client.get(&format!(
-                "/repos/{owner}/{name}/actions/runs/{run_id}/jobs"
-            ))?;
-            jobs["jobs"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|j| j["id"].as_u64())
-                .collect()
-        }
+    // Fetch job status alongside id/name so we can skip logs for jobs that
+    // haven't finished yet — GitHub's logs endpoint 404s with a raw
+    // "BlobNotFound" XML error for a job whose log archive doesn't exist
+    // yet, which reads as a crash rather than "come back once it's done".
+    let all_jobs: Value = client.get(&format!(
+        "/repos/{owner}/{name}/actions/runs/{run_id}/jobs"
+    ))?;
+    let jobs_arr = all_jobs["jobs"].as_array().cloned().unwrap_or_default();
+
+    let targets: Vec<Value> = match job {
+        Some(j) => jobs_arr.into_iter().filter(|v| v["id"].as_u64() == Some(j)).collect(),
+        None => jobs_arr,
     };
 
-    for jid in job_ids {
+    if targets.is_empty() {
+        println!("{} no matching job found for run #{run_id}", "!".yellow());
+        return Ok(());
+    }
+
+    for j in targets {
+        let jid = j["id"].as_u64().unwrap_or(0);
+        let jname = j["name"].as_str().unwrap_or("?");
+        let jstatus = j["status"].as_str().unwrap_or("?");
+
+        if jstatus != "completed" {
+            println!(
+                "{} job {jid} ({jname}) is still {} — logs aren't available until it finishes",
+                "…".yellow(),
+                jstatus.cyan()
+            );
+            continue;
+        }
+
         let text = client
             .get_raw(
                 &format!("/repos/{owner}/{name}/actions/jobs/{jid}/logs"),
                 "application/vnd.github+json",
             )
             .with_context(|| format!("fetching logs for job {jid}"))?;
-        println!("{}", format!("── job {jid} ──").dimmed());
+        println!("{}", format!("── job {jid} ({jname}) ──").dimmed());
         println!("{text}");
     }
     Ok(())
