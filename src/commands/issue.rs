@@ -1,5 +1,5 @@
 use crate::api::Client;
-use crate::gitutil::{self, Repo};
+use crate::git::{self, GhRepo};
 use anyhow::Result;
 use colored::Colorize;
 use serde_json::{json, Value};
@@ -48,9 +48,9 @@ pub enum IssueCommand {
 
 fn resolve(repo: Option<String>) -> Result<(String, String)> {
     match repo {
-        Some(slug) => gitutil::parse_slug(&slug),
+        Some(slug) => git::parse_slug(&slug),
         None => {
-            let r = Repo::detect()?;
+            let r = GhRepo::detect()?;
             Ok((r.owner, r.name))
         }
     }

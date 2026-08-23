@@ -1,5 +1,5 @@
 use crate::api::Client;
-use crate::gitutil::{self, Repo};
+use crate::git::{self, GhRepo};
 use anyhow::Result;
 use colored::Colorize;
 use serde_json::Value;
@@ -27,9 +27,9 @@ pub enum RepoCommand {
 
 fn resolve(repo: Option<String>) -> Result<(String, String)> {
     match repo {
-        Some(slug) => gitutil::parse_slug(&slug),
+        Some(slug) => git::parse_slug(&slug),
         None => {
-            let r = Repo::detect()?;
+            let r = GhRepo::detect()?;
             Ok((r.owner, r.name))
         }
     }
@@ -74,13 +74,9 @@ fn view(client: &Client, repo: Option<String>) -> Result<()> {
 }
 
 fn clone(repo: &str, dir: Option<String>) -> Result<()> {
-    let (owner, name) = gitutil::parse_slug(repo)?;
+    let (owner, name) = git::parse_slug(repo)?;
     let url = format!("https://github.com/{owner}/{name}.git");
-    let mut args = vec!["clone", url.as_str()];
-    if let Some(d) = &dir {
-        args.push(d.as_str());
-    }
-    gitutil::run_inherit(&args)
+    git::clone(&url, dir.as_ref().map(std::path::Path::new))
 }
 
 fn list(client: &Client, limit: u32) -> Result<()> {

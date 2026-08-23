@@ -20,7 +20,14 @@ dirs = "5"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 colored = "2"
 open = "5"
+# Vendored: builds libgit2 (+ OpenSSL where needed) from source at compile
+# time. No system libgit2/OpenSSL dependency on any platform — this is what
+# makes git operations "ours" rather than a shell-out to a `git` binary.
+git2 = { version = "0.19", features = ["vendored-libgit2", "vendored-openssl"] }
 
 [profile.release]
 opt-level = 3
 lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
