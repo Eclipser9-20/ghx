@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-beta.*"
+    branches:
+      - "master"
+  workflow_dispatch:
+
+jobs:
+  determine-channel:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.channel.outputs.channel }}
+      tag: ${{ steps.channel.outputs.tag }}
+      prerelease: ${{ steps.channel.outputs.prerelease }}
+    steps:
+      - id: channel
+        run: |
+          ref="${{ github.ref }}"
+          if [[ "$ref" == refs/tags/v*-beta.* ]]; then
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+            echo "tag=${ref#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$ref" == refs/tags/v* ]]; then
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+            echo "tag=${ref#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=dev" >> "$GITHUB_OUTPUT"
+            echo "tag=dev" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: determine-channel
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset: ghx-windows-x86_64.exe
+            bin: target/x86_64-pc-windows-msvc/release/ghx.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset: ghx-linux-x86_64
+            bin: target/x86_64-unknown-linux-gnu/release/ghx
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset: ghx-macos-aarch64
+            bin: target/aarch64-apple-darwin/release/ghx
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset: ghx-macos-x86_64
+            bin: target/x86_64-apple-darwin/release/ghx
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage asset
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.bin }}" "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+
+  publish:
+    needs: [determine-channel, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Delete existing dev release (rolling channel)
+        if: needs.determine-channel.outputs.channel == 'dev'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete dev --repo "${{ github.repository }}" --yes --cleanup-tag || true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.determine-channel.outputs.tag }}
+          prerelease: ${{ needs.determine-channel.outputs.prerelease }}
+          name: "ghx ${{ needs.determine-channel.outputs.tag }}"
+          files: dist/*

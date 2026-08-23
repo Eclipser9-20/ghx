@@ -47,6 +47,21 @@ impl Client {
     }
 
     /// GET with a custom Accept header, returning the raw response body as
+    /// bytes. Used for binary downloads (release assets).
+    pub fn get_bytes(&self, path: &str, accept: &str) -> Result<Vec<u8>> {
+        let resp = self
+            .request(reqwest::Method::GET, path)
+            .header("Accept", accept)
+            .send()
+            .with_context(|| format!("GET {path}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            bail!("GitHub API error ({status}) fetching {path}");
+        }
+        Ok(resp.bytes().context("reading response body")?.to_vec())
+    }
+
+    /// GET with a custom Accept header, returning the raw response body as
     /// text. Used for endpoints that don't return JSON (diffs, Action
     /// job logs).
     pub fn get_raw(&self, path: &str, accept: &str) -> Result<String> {
