@@ -5,6 +5,7 @@ use serde_json::Value;
 const API_BASE: &str = "https://api.github.com";
 const USER_AGENT: &str = concat!("ghx/", env!("CARGO_PKG_VERSION"));
 
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::blocking::Client,
     token: Option<String>,
