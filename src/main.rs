@@ -122,6 +122,9 @@ enum Command {
         /// Delete a tag with this name
         #[arg(long)]
         delete: Option<String>,
+        /// Also push a newly created tag to this remote
+        #[arg(long, requires = "create")]
+        push: Option<String>,
     },
     /// List, add, or remove remotes
     Remote {
@@ -188,7 +191,8 @@ fn run() -> Result<()> {
             create,
             message,
             delete,
-        } => return gitcmd::tag(create, message, delete),
+            push,
+        } => return gitcmd::tag(create, message, delete, push),
         Command::Remote { cmd } => return gitcmd::remote(cmd),
         Command::Reset { mode, target } => return gitcmd::reset(&mode, &target),
         _ => {}

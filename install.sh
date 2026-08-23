@@ -9,12 +9,14 @@
 #   $HOME/.ghx/cache/    per-user cache
 #
 # When run as root, $LOCAL defaults to /usr/local, $LOCAL/ghx is owned by a
-# dedicated "ghx" group (setgid, group-writable), and the invoking user
-# (the one who ran `sudo ./install.sh`, if any) is added to that group —
-# so `ghx --update stable` works afterward without needing sudo again.
-# Anyone else on the machine can still run ghx, just not overwrite it,
-# unless an admin adds them to the group too (`sudo usermod -aG ghx <user>`
-# on Linux, or the macOS equivalent below).
+# dedicated "_GHXmaintenance" group (setgid, group-writable), and the
+# invoking user (the one who ran `sudo ./install.sh`, if any) is added to
+# that group — so `ghx --update stable` works afterward without needing
+# sudo again. Anyone else on the machine can still run ghx, just not
+# overwrite it, unless an admin adds them to the group too
+# (`sudo usermod -aG _GHXmaintenance <user>` on Linux, or the macOS
+# equivalent below). The leading underscore follows macOS's convention for
+# system/service groups that don't show up as regular user-facing groups.
 #
 # When run as a normal user with no root available, everything installs
 # under $HOME/.local instead, owned by that user — no group needed, since
@@ -30,7 +32,7 @@ set -euo pipefail
 
 REPO="Eclipser9-20/ghx"
 CHANNEL="${GHX_CHANNEL:-stable}"
-GROUP_NAME="ghx"
+GROUP_NAME="_GHXmaintenance"
 
 os="$(uname -s)"
 arch="$(uname -m)"

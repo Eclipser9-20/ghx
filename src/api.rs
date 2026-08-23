@@ -155,6 +155,25 @@ impl Client {
         Ok(())
     }
 
+    /// Arbitrary request against the API, for `ghx api`. Returns the
+    /// status code and raw response body regardless of success/failure —
+    /// callers decide what to do with an error status themselves.
+    pub fn raw_request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&Value>,
+    ) -> Result<(u16, String)> {
+        let mut req = self.request(method.clone(), path);
+        if let Some(b) = body {
+            req = req.json(b);
+        }
+        let resp = req.send().with_context(|| format!("{method} {path}"))?;
+        let status = resp.status().as_u16();
+        let text = resp.text().context("reading response body")?;
+        Ok((status, text))
+    }
+
     fn handle<T: DeserializeOwned>(resp: reqwest::blocking::Response) -> Result<T> {
         let status = resp.status();
         let text = resp.text().context("reading response body")?;

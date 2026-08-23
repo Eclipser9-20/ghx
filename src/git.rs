@@ -407,6 +407,20 @@ pub fn push(remote_name: &str, branch: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+pub fn push_tag(remote_name: &str, tag: &str) -> Result<()> {
+    let repo = open_current()?;
+    let mut remote = repo
+        .find_remote(remote_name)
+        .with_context(|| format!("no remote named '{remote_name}'"))?;
+    let refspec = format!("refs/tags/{tag}:refs/tags/{tag}");
+    let mut po = PushOptions::new();
+    po.remote_callbacks(remote_callbacks());
+    remote
+        .push(&[refspec.as_str()], Some(&mut po))
+        .with_context(|| format!("pushing tag {tag} to {remote_name}"))?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------
 // stash — one of the most notoriously fiddly parts of git's own CLI
 // ---------------------------------------------------------------------
