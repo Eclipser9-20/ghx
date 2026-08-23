@@ -76,15 +76,18 @@ enum TokenPollResp {
     Pending { error: String },
 }
 
+/// ghx's own GitHub OAuth App client id, used for the device-flow login so
+/// `ghx auth login` works out of the box with no setup. Device-flow client
+/// ids are not secrets — they identify the app, not a user or credential —
+/// so shipping this baked into the binary is the standard approach (the
+/// same one `gh`, the official GitHub CLI, uses). `GHX_CLIENT_ID` still
+/// overrides it for anyone who wants to authorize under their own app
+/// instead (e.g. a fork, or an org that wants its own audit trail).
+///
+const DEFAULT_CLIENT_ID: &str = "Ov23liR3in1b9Tvpbw7U";
+
 fn login_device_flow() -> Result<()> {
-    let client_id = std::env::var("GHX_CLIENT_ID").context(
-        "device-flow login requires a GitHub OAuth App client id.\n\
-         Create one at https://github.com/settings/applications/new \
-         (enable \"Device Flow\" under the app's settings), then set:\n  \
-         GHX_CLIENT_ID=<your client id>\n\
-         Or use `ghx auth login --with-token` with a personal access token instead \
-         (Settings -> Developer settings -> Personal access tokens).",
-    )?;
+    let client_id = std::env::var("GHX_CLIENT_ID").unwrap_or_else(|_| DEFAULT_CLIENT_ID.to_string());
 
     let http = reqwest::blocking::Client::builder()
         .user_agent(concat!("ghx/", env!("CARGO_PKG_VERSION")))
