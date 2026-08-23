@@ -1,15 +1,18 @@
 #!/usr/bin/env pwsh
-# Removes a system-wide ghx install done by install.ps1. This is the
-# elevated counterpart to `ghx --uninstall` — use it when you can't (or
-# don't want to) run the ghx binary itself to remove it, e.g. a broken
-# install, remote/unattended cleanup, or removing it for another user.
+# Removes a ghx install done by install.ps1. This is the standalone
+# counterpart to `ghx --uninstall` — use it when you can't (or don't
+# want to) run the ghx binary itself to remove it, e.g. a broken install,
+# remote/unattended cleanup, or removing it for another user.
 #
-# Removes:
-#   C:\Program Files\ghx\          the install directory
-#   The install dir from the machine PATH
+# Run elevated (Administrator) to remove a system-wide install:
+#   C:\Program Files\ghx\          removed, and dropped from the machine PATH
+# Run un-elevated to remove a per-user install:
+#   %LOCALAPPDATA%\ghx\            removed, and dropped from the user PATH
+#
+# Also removes:
 #   %APPDATA%\ghx\                 config for the CURRENT user only
-#                                   (pass -AllUserProfiles to sweep every
-#                                   profile on the machine)
+#                                   (pass -AllUserProfiles, elevated only,
+#                                   to sweep every profile on the machine)
 #
 # Leaves the "_GHXmaintenance" local group in place, since removing a
 # group can strand its membership on other machines/tools that reference
@@ -17,8 +20,9 @@
 # nothing else depends on it.
 #
 # Params:
-#   -AllUserProfiles   also remove %APPDATA%\ghx from every local user
-#                       profile, not just the one running this script
+#   -AllUserProfiles   (elevated only) also remove %APPDATA%\ghx from
+#                      every local user profile, not just the one running
+#                      this script
 
 param(
     [switch]$AllUserProfiles
@@ -27,12 +31,18 @@ param(
 $ErrorActionPreference = "Stop"
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Error "This uninstaller needs to run elevated (Administrator), since it removes Program Files. Re-run PowerShell as Administrator."
-    exit 1
-}
 
-$GhxHome = "C:\Program Files\ghx"
+if ($isAdmin) {
+    $GhxHome = "C:\Program Files\ghx"
+    $PathScope = "Machine"
+} else {
+    $GhxHome = Join-Path $env:LOCALAPPDATA "ghx"
+    $PathScope = "User"
+    if ($AllUserProfiles) {
+        Write-Error "-AllUserProfiles needs an elevated (Administrator) PowerShell to read other users' profiles."
+        exit 1
+    }
+}
 $BinDir = Join-Path $GhxHome "bin"
 
 if (Test-Path $GhxHome) {
@@ -40,13 +50,18 @@ if (Test-Path $GhxHome) {
     Write-Host "==> Removed $GhxHome" -ForegroundColor Cyan
 } else {
     Write-Host "==> $GhxHome not found, nothing to remove there." -ForegroundColor Yellow
+    if ($isAdmin) {
+        Write-Host "    (run without elevation to remove a per-user install instead)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "    (run elevated to remove a system-wide install instead)" -ForegroundColor DarkGray
+    }
 }
 
-$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-$pathEntries = $machinePath -split ';' | Where-Object { $_ -and $_ -ne $BinDir }
-if (($machinePath -split ';') -contains $BinDir) {
-    [Environment]::SetEnvironmentVariable("Path", ($pathEntries -join ';'), "Machine")
-    Write-Host "==> Removed $BinDir from the system PATH." -ForegroundColor Cyan
+$existingPath = [Environment]::GetEnvironmentVariable("Path", $PathScope)
+$pathEntries = $existingPath -split ';' | Where-Object { $_ -and $_ -ne $BinDir }
+if (($existingPath -split ';') -contains $BinDir) {
+    [Environment]::SetEnvironmentVariable("Path", ($pathEntries -join ';'), $PathScope)
+    Write-Host "==> Removed $BinDir from the $PathScope PATH." -ForegroundColor Cyan
 }
 
 function Remove-GhxConfig($profilePath) {

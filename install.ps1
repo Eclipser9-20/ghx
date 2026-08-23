@@ -1,34 +1,38 @@
 #!/usr/bin/env pwsh
-# Installs ghx to Program Files on Windows.
+# Installs ghx on Windows.
 #
-# Layout:
+# Run elevated (Administrator) for a system-wide install:
 #   C:\Program Files\ghx\bin\ghx.exe   the binary
 #   C:\Program Files\ghx\lib\          reserved for future support files
-#   %APPDATA%\ghx\                     per-user config (unchanged — this
-#                                       is where ghx already reads/writes it)
-#
-# Requires an elevated (Administrator) PowerShell to install, since
-# Program Files is only writable by Administrators by default. To let
-# `ghx --update`/`--uninstall` work afterward WITHOUT elevation, this
-# installer creates a local group "_GHXmaintenance" and grants it Modify
-# rights on the install directory specifically (not Program Files as a
-# whole) — the same "owner has full control, group can update, everyone
-# else read+execute only" model as install.sh's Unix group, just via an
-# NTFS ACL instead of POSIX permission bits. Add another user to that
-# group (Computer Management > Local Users and Groups, or
-# `Add-LocalGroupMember -Group _GHXmaintenance -Member <user>`) to let
+# The install dir is added to the machine PATH. To let `ghx --update`/
+# `--uninstall` work afterward WITHOUT elevation, a local group
+# "_GHXmaintenance" is created and granted Modify rights on the install
+# directory specifically (not Program Files as a whole) — the same
+# "owner has full control, group can update, everyone else read+execute
+# only" model as install.sh's Unix group, just via an NTFS ACL instead of
+# POSIX permission bits. Add another user to that group
+# (`Add-LocalGroupMember -Group _GHXmaintenance -Member <user>`) to let
 # them update/uninstall without an admin prompt too.
+#
+# Run un-elevated for a per-user install, no admin needed:
+#   %LOCALAPPDATA%\ghx\bin\ghx.exe
+# added to the current user's PATH. No group/ACL setup — the user already
+# owns everything they'd want to update.
+#
+# %APPDATA%\ghx\ (config) is unaffected either way — that's where ghx
+# already reads/writes it, independent of where the binary itself lives.
 #
 # Params:
 #   -Channel        stable (default) | beta | dev
 #   -LocalBinary    path to an already-built ghx.exe to install instead of
 #                   downloading a release (for building from source)
-#   -GrantTo        user (DOMAIN\name or name) to add to _GHXmaintenance.
-#                   Defaults to whoever is running the installer — but when
-#                   this runs as NT AUTHORITY\SYSTEM (a deployment tool or
-#                   scheduled task), that default is useless, since nobody
-#                   logs in as SYSTEM. In that case, pass the real target
-#                   user explicitly, e.g. -GrantTo "CONTOSO\jsmith".
+#   -GrantTo        (elevated installs only) user (DOMAIN\name or name) to
+#                   add to _GHXmaintenance. Defaults to whoever is running
+#                   the installer — but when this runs as NT
+#                   AUTHORITY\SYSTEM (a deployment tool or scheduled
+#                   task), that default is useless, since nobody logs in
+#                   as SYSTEM. In that case, pass the real target user
+#                   explicitly, e.g. -GrantTo "CONTOSO\jsmith".
 
 param(
     [string]$Channel = "stable",
@@ -39,18 +43,23 @@ param(
 $ErrorActionPreference = "Stop"
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Error "This installer needs to run elevated (Administrator), since it writes to Program Files. Re-run PowerShell as Administrator."
-    exit 1
-}
 
 $Repo = "Eclipser9-20/ghx"
-$GhxHome = "C:\Program Files\ghx"
+if ($isAdmin) {
+    $GhxHome = "C:\Program Files\ghx"
+    $PathScope = "Machine"
+} else {
+    $GhxHome = Join-Path $env:LOCALAPPDATA "ghx"
+    $PathScope = "User"
+}
 $BinDir = Join-Path $GhxHome "bin"
 $LibDir = Join-Path $GhxHome "lib"
 $TargetExe = Join-Path $BinDir "ghx.exe"
 
 Write-Host "==> Installing ghx ($Channel) to $GhxHome" -ForegroundColor Cyan
+if (-not $isAdmin) {
+    Write-Host "    (per-user install — run elevated instead for a system-wide install)" -ForegroundColor DarkGray
+}
 
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 New-Item -ItemType Directory -Force -Path $LibDir | Out-Null
@@ -88,11 +97,17 @@ if ($LocalBinary) {
     Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $TargetExe
 }
 
-# Add the install dir to the machine PATH if it isn't already there.
-$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-if (($machinePath -split ';') -notcontains $BinDir) {
-    [Environment]::SetEnvironmentVariable("Path", "$machinePath;$BinDir", "Machine")
-    Write-Host "==> Added $BinDir to the system PATH (restart your terminal to pick it up)." -ForegroundColor Yellow
+# Add the install dir to the appropriate PATH (machine-wide when elevated,
+# current user's otherwise) if it isn't already there.
+$existingPath = [Environment]::GetEnvironmentVariable("Path", $PathScope)
+if (($existingPath -split ';') -notcontains $BinDir) {
+    [Environment]::SetEnvironmentVariable("Path", "$existingPath;$BinDir", $PathScope)
+    Write-Host "==> Added $BinDir to the $PathScope PATH (restart your terminal to pick it up)." -ForegroundColor Yellow
+}
+
+if (-not $isAdmin) {
+    Write-Host "==> Installed: $TargetExe" -ForegroundColor Green
+    return
 }
 
 $GroupName = "_GHXmaintenance"
