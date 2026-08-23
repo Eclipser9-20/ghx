@@ -1,12 +1,17 @@
+mod ai;
 mod api;
 mod commands;
 mod config;
 mod git;
+mod lfs;
 mod update;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use commands::{auth, git as gitcmd, issue, pr, repo, run as runcmd};
+use commands::{
+    auth, git as gitcmd, issue, lfs as lfscmd, notifications, org, pr, repo, run as runcmd,
+    webhook,
+};
 
 #[derive(Parser)]
 #[command(name = "ghx", version, about = "A GitHub CLI, in Rust", disable_help_flag = true)]
@@ -50,6 +55,21 @@ enum Command {
         #[command(subcommand)]
         cmd: runcmd::RunCommand,
     },
+    /// Work with organizations
+    Org {
+        #[command(subcommand)]
+        cmd: org::OrgCommand,
+    },
+    /// Work with repository webhooks
+    Webhook {
+        #[command(subcommand)]
+        cmd: webhook::WebhookCommand,
+    },
+    /// Work with notifications
+    Notifications {
+        #[command(subcommand)]
+        cmd: notifications::NotificationsCommand,
+    },
     /// Print a file's contents from a repo (owner/repo/path/to/file)
     Raw {
         spec: String,
@@ -86,7 +106,10 @@ enum Command {
     /// Record staged changes
     Commit {
         #[arg(short = 'm', long)]
-        message: String,
+        message: Option<String>,
+        /// Generate the message from the staged diff via an AI backend
+        #[arg(long)]
+        generate: bool,
     },
     /// Download objects/refs from a remote
     Fetch {
@@ -139,6 +162,12 @@ enum Command {
         #[arg(default_value = "HEAD")]
         target: String,
     },
+    /// Git LFS: track large files as pointer files, backed by GitHub's LFS
+    /// batch API
+    Lfs {
+        #[command(subcommand)]
+        cmd: lfscmd::LfsCommand,
+    },
 }
 
 fn main() {
@@ -181,7 +210,7 @@ fn run() -> Result<()> {
         Command::Branch { create, delete } => return gitcmd::branch(create, delete),
         Command::Checkout { refname } => return gitcmd::checkout(&refname),
         Command::Add { paths } => return gitcmd::add(paths),
-        Command::Commit { message } => return gitcmd::commit(&message),
+        Command::Commit { message, generate } => return gitcmd::commit(message, generate),
         Command::Fetch { remote } => return gitcmd::fetch(&remote),
         Command::Pull { remote } => return gitcmd::pull(&remote),
         Command::Push { remote, branch } => return gitcmd::push(&remote, branch.as_deref()),
@@ -195,6 +224,7 @@ fn run() -> Result<()> {
         } => return gitcmd::tag(create, message, delete, push),
         Command::Remote { cmd } => return gitcmd::remote(cmd),
         Command::Reset { mode, target } => return gitcmd::reset(&mode, &target),
+        Command::Lfs { cmd } => return lfscmd::run(cmd),
         _ => {}
     }
 
@@ -207,6 +237,9 @@ fn run() -> Result<()> {
         Command::Issue { cmd } => issue::run(&client, cmd),
         Command::Run { cmd } => runcmd::run(&client, cmd),
         Command::Raw { spec, git_ref } => repo::raw(&client, &spec, git_ref),
+        Command::Org { cmd } => org::run(&client, cmd),
+        Command::Webhook { cmd } => webhook::run(&client, cmd),
+        Command::Notifications { cmd } => notifications::run(&client, cmd),
         _ => unreachable!(),
     }
 }

@@ -37,6 +37,37 @@ pub enum RepoCommand {
         /// owner/repo — must be given in full, no default-to-current-dir, as a safety measure
         repo: String,
     },
+    /// Change a repository's visibility
+    Visibility {
+        repo: String,
+        #[arg(value_parser = ["public", "private"])]
+        visibility: String,
+    },
+    /// List a repository's collaborators
+    Collaborators { repo: String },
+    /// Add a collaborator to a repository
+    AddCollaborator {
+        repo: String,
+        username: String,
+        #[arg(long, value_parser = ["pull", "push", "admin", "maintain", "triage"], default_value = "push")]
+        permission: String,
+    },
+    /// Remove a collaborator from a repository
+    RemoveCollaborator { repo: String, username: String },
+    /// Show branch protection settings for a branch
+    BranchProtection { repo: String, branch: String },
+    /// Protect a branch
+    Protect {
+        repo: String,
+        branch: String,
+        #[arg(long)]
+        require_reviews: Option<u64>,
+        /// Comma-separated list of required status checks
+        #[arg(long)]
+        require_status_checks: Option<String>,
+        #[arg(long)]
+        enforce_admins: bool,
+    },
 }
 
 /// Print a file's contents from a repo, given "owner/repo/path/to/file"
@@ -88,6 +119,34 @@ pub fn run(client: &Client, cmd: RepoCommand) -> Result<()> {
             private,
         } => create(client, &name, description, private),
         RepoCommand::Delete { repo } => delete(client, &repo),
+        RepoCommand::Visibility {
+            repo,
+            visibility: vis,
+        } => visibility(client, &repo, &vis),
+        RepoCommand::Collaborators { repo } => collaborators(client, &repo),
+        RepoCommand::AddCollaborator {
+            repo,
+            username,
+            permission,
+        } => add_collaborator(client, &repo, &username, &permission),
+        RepoCommand::RemoveCollaborator { repo, username } => {
+            remove_collaborator(client, &repo, &username)
+        }
+        RepoCommand::BranchProtection { repo, branch } => branch_protection(client, &repo, &branch),
+        RepoCommand::Protect {
+            repo,
+            branch,
+            require_reviews,
+            require_status_checks,
+            enforce_admins,
+        } => protect(
+            client,
+            &repo,
+            &branch,
+            require_reviews,
+            require_status_checks,
+            enforce_admins,
+        ),
     }
 }
 
@@ -158,6 +217,111 @@ fn delete(client: &Client, repo: &str) -> Result<()> {
     let (owner, name) = git::parse_slug(repo)?;
     client.delete(&format!("/repos/{owner}/{name}"))?;
     println!("{} Deleted {}", "✓".green().bold(), repo);
+    Ok(())
+}
+
+fn visibility(client: &Client, repo: &str, visibility: &str) -> Result<()> {
+    let (owner, name) = git::parse_slug(repo)?;
+    let private = visibility == "private";
+    let body = json!({ "private": private });
+    let _: Value = client.patch(&format!("/repos/{owner}/{name}"), &body)?;
+    println!(
+        "{} Set {repo} to {visibility}",
+        "✓".green().bold()
+    );
+    Ok(())
+}
+
+fn collaborators(client: &Client, repo: &str) -> Result<()> {
+    let (owner, name) = git::parse_slug(repo)?;
+    let collaborators: Vec<Value> = client.get(&format!("/repos/{owner}/{name}/collaborators"))?;
+    for c in &collaborators {
+        let login = c["login"].as_str().unwrap_or("?");
+        let permissions = &c["permissions"];
+        println!("{:<25} {}", login.bold(), permissions);
+    }
+    Ok(())
+}
+
+fn add_collaborator(client: &Client, repo: &str, username: &str, permission: &str) -> Result<()> {
+    let (owner, name) = git::parse_slug(repo)?;
+    let body = json!({ "permission": permission });
+    client.put(
+        &format!("/repos/{owner}/{name}/collaborators/{username}"),
+        &body,
+    )?;
+    println!(
+        "{} Added {username} to {repo} with {permission} permission",
+        "✓".green().bold()
+    );
+    Ok(())
+}
+
+fn remove_collaborator(client: &Client, repo: &str, username: &str) -> Result<()> {
+    let (owner, name) = git::parse_slug(repo)?;
+    client.delete(&format!(
+        "/repos/{owner}/{name}/collaborators/{username}"
+    ))?;
+    println!("{} Removed {username} from {repo}", "✓".green().bold());
+    Ok(())
+}
+
+fn branch_protection(client: &Client, repo: &str, branch: &str) -> Result<()> {
+    let (owner, name) = git::parse_slug(repo)?;
+    let (status, data) = client.get_status(&format!(
+        "/repos/{owner}/{name}/branches/{branch}/protection"
+    ))?;
+    if status == 404 {
+        println!("{} is not protected", branch.bold());
+        return Ok(());
+    }
+    if status >= 400 {
+        anyhow::bail!("GitHub API error ({status}): {data}");
+    }
+    println!("{data:#}");
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn protect(
+    client: &Client,
+    repo: &str,
+    branch: &str,
+    require_reviews: Option<u64>,
+    require_status_checks: Option<String>,
+    enforce_admins: bool,
+) -> Result<()> {
+    let (owner, name) = git::parse_slug(repo)?;
+
+    let required_status_checks = match require_status_checks {
+        Some(checks) => {
+            let contexts: Vec<String> = checks.split(',').map(|s| s.trim().to_string()).collect();
+            json!({ "strict": true, "contexts": contexts })
+        }
+        None => Value::Null,
+    };
+
+    let required_pull_request_reviews = match require_reviews {
+        Some(n) => json!({ "required_approving_review_count": n }),
+        None => Value::Null,
+    };
+
+    let body = json!({
+        "required_status_checks": required_status_checks,
+        "enforce_admins": enforce_admins,
+        "required_pull_request_reviews": required_pull_request_reviews,
+        "restrictions": Value::Null,
+    });
+
+    let _: Value = client.put_json(
+        &format!("/repos/{owner}/{name}/branches/{branch}/protection"),
+        &body,
+    )?;
+    println!(
+        "{} Protected branch {} on {repo}",
+        "✓".green().bold(),
+        branch.bold()
+    );
     Ok(())
 }
 

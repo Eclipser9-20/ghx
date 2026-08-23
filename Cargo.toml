@@ -26,6 +26,11 @@ git2 = { version = "0.19", features = ["vendored-libgit2", "vendored-openssl"] }
 # OS-native credential storage: Windows Credential Manager, macOS Keychain,
 # Linux Secret Service (libsecret) / kwallet.
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
+notify-rust = "4"
+# Git LFS pointer OIDs (sha256) and Basic-auth header encoding for the LFS
+# batch API.
+sha2 = "0.10"
+base64 = "0.22"
 
 [profile.release]
 opt-level = 3
