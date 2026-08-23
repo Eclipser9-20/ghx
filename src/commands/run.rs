@@ -103,15 +103,66 @@ fn list(client: &Client, repo: Option<String>, limit: u32) -> Result<()> {
     Ok(())
 }
 
+fn parse_time(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc))
+}
+
+fn format_duration(start: &str, end: Option<&str>) -> String {
+    let Some(start) = parse_time(start) else {
+        return "?".to_string();
+    };
+    let end = end.and_then(parse_time).unwrap_or_else(chrono::Utc::now);
+    let secs = (end - start).num_seconds().max(0);
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m{}s", secs / 60, secs % 60)
+    }
+}
+
 fn view(client: &Client, repo: Option<String>, run_id: u64) -> Result<()> {
     let (owner, name) = resolve(repo)?;
     let run: Value = client.get(&format!("/repos/{owner}/{name}/actions/runs/{run_id}"))?;
+
     let title = run["name"].as_str().unwrap_or("?");
     let status = run["status"].as_str().unwrap_or("?");
     let conclusion = run["conclusion"].as_str();
     let url = run["html_url"].as_str().unwrap_or("");
+    let event = run["event"].as_str().unwrap_or("?");
+    let branch = run["head_branch"].as_str().unwrap_or("?");
+    let actor = run["triggering_actor"]["login"]
+        .as_str()
+        .or_else(|| run["actor"]["login"].as_str())
+        .unwrap_or("?");
+    let sha = run["head_sha"].as_str().unwrap_or("");
+    let short_sha = &sha[..sha.len().min(7)];
+    let commit_msg = run["head_commit"]["message"]
+        .as_str()
+        .and_then(|m| m.lines().next())
+        .unwrap_or("");
+    let run_number = run["run_number"].as_u64().unwrap_or(0);
+    let run_attempt = run["run_attempt"].as_u64().unwrap_or(1);
+    let created_at = run["created_at"].as_str().unwrap_or("");
+    let updated_at = run["updated_at"].as_str();
 
-    println!("{}  {}", title.bold(), status_tag(status, conclusion));
+    println!(
+        "{}  {}  {}",
+        title.bold(),
+        status_tag(status, conclusion),
+        format!("run #{run_number} (attempt {run_attempt})").dimmed()
+    );
+    println!(
+        "{} on {}  by {}  {}",
+        event.cyan(),
+        branch.cyan(),
+        actor,
+        format!("{short_sha} {commit_msg}").dimmed()
+    );
+    if !created_at.is_empty() {
+        println!("duration: {}", format_duration(created_at, updated_at));
+    }
     println!("{}", url.underline());
     println!();
 
@@ -123,12 +174,31 @@ fn view(client: &Client, repo: Option<String>, run_id: u64) -> Result<()> {
         let jname = j["name"].as_str().unwrap_or("?");
         let jstatus = j["status"].as_str().unwrap_or("?");
         let jconclusion = j["conclusion"].as_str();
+        let jstarted = j["started_at"].as_str();
+        let jduration = jstarted
+            .map(|s| format_duration(s, j["completed_at"].as_str()))
+            .unwrap_or_else(|| "?".to_string());
+
         println!(
-            "{} {}  {}",
+            "{} {}  {}  {}",
             format!("#{jid}").dimmed(),
             status_tag(jstatus, jconclusion),
-            jname
+            jname.bold(),
+            format!("({jduration})").dimmed()
         );
+
+        for step in j["steps"].as_array().cloned().unwrap_or_default() {
+            let step_name = step["name"].as_str().unwrap_or("?");
+            let step_status = step["status"].as_str().unwrap_or("?");
+            let step_conclusion = step["conclusion"].as_str();
+            let step_number = step["number"].as_u64().unwrap_or(0);
+            println!(
+                "    {} {} {}",
+                format!("{step_number}.").dimmed(),
+                status_tag(step_status, step_conclusion),
+                step_name
+            );
+        }
     }
     Ok(())
 }

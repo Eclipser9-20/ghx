@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod git;
 mod lfs;
+mod uninstall;
 mod update;
 
 use anyhow::Result;
@@ -14,17 +15,18 @@ use commands::{
 };
 
 #[derive(Parser)]
-#[command(name = "ghx", version, about = "A GitHub CLI, in Rust", disable_help_flag = true)]
+#[command(name = "ghx", version, about = "A GitHub CLI, in Rust")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    #[arg(short = 'h', long = "help", action = clap::ArgAction::SetTrue)]
-    help: bool,
-
     /// Update ghx to the latest release on a channel: stable, beta, or dev
     #[arg(long, value_name = "CHANNEL")]
     update: Option<String>,
+
+    /// Remove ghx (the installed binary, and credentials/config it stored)
+    #[arg(long)]
+    uninstall: bool,
 }
 
 #[derive(Subcommand)]
@@ -190,6 +192,10 @@ fn run() -> Result<()> {
     }
 
     let cli = Cli::parse();
+
+    if cli.uninstall {
+        return uninstall::run();
+    }
 
     if let Some(channel) = cli.update {
         let token = config::Config::resolve_token()?;
