@@ -413,9 +413,20 @@ pub fn commit(message: &str) -> Result<String> {
     let tree = repo.find_tree(tree_id)?;
 
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
-    let parents: Vec<&git2::Commit> = parent.iter().collect();
+    // A merge in progress (conflicts resolved, ready to finalize) has its
+    // other parent recorded in MERGE_HEAD — include it so the resulting
+    // commit is a real two-parent merge commit, not a plain linear one.
+    let merge_parent = repo
+        .find_reference("MERGE_HEAD")
+        .ok()
+        .and_then(|r| r.peel_to_commit().ok());
+    let mut parents: Vec<&git2::Commit> = parent.iter().collect();
+    parents.extend(merge_parent.iter());
 
     let oid = repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)?;
+    if merge_parent.is_some() {
+        repo.cleanup_state()?;
+    }
     Ok(oid.to_string()[..7].to_string())
 }
 
