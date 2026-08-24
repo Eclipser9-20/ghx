@@ -100,7 +100,7 @@ pub fn parse_slug(slug: &str) -> Result<(String, String)> {
     }
 }
 
-fn open_current() -> Result<Repository> {
+pub fn open_current() -> Result<Repository> {
     Repository::discover(".").context("not a git repository (or any parent up to the root)")
 }
 

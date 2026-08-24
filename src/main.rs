@@ -6,6 +6,7 @@ mod filter;
 mod git;
 mod highlight;
 mod lfs;
+mod palette;
 mod tui;
 mod uninstall;
 mod update;
@@ -13,8 +14,8 @@ mod update;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
-    apicmd, auth, browse, filter as filtercmd, git as gitcmd, issue, label, lfs as lfscmd,
-    notifications, org, pr, repo, run as runcmd, webhook,
+    apicmd, auth, browse, filter as filtercmd, git as gitcmd, grep as grepcmd, issue, label,
+    lfs as lfscmd, notifications, org, pr, repo, run as runcmd, webhook,
 };
 
 #[derive(Parser)]
@@ -226,6 +227,13 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Search tracked files for a regex pattern
+    Grep {
+        /// Regular expression to search for
+        pattern: String,
+        /// Limit the search to this path prefix
+        path: Option<String>,
+    },
     /// Work with repository labels
     Label {
         #[command(subcommand)]
@@ -366,6 +374,7 @@ fn run() -> Result<()> {
             replace_text,
             yes,
         } => return filtercmd::run(path, invert_paths, replace_text, yes),
+        Command::Grep { pattern, path } => return grepcmd::run(&pattern, path),
         Command::Tui { panel } => return run_tui(panel),
         _ => {}
     }

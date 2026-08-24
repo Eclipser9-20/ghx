@@ -3,6 +3,7 @@ pub mod auth;
 pub mod browse;
 pub mod filter;
 pub mod git;
+pub mod grep;
 pub mod issue;
 pub mod label;
 pub mod lfs;
