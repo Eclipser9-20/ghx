@@ -19,6 +19,12 @@ pub struct Config {
     /// written into history. Also enabled by the `GHX_PRIVATE_EMAIL` env var.
     #[serde(default)]
     pub private_email: bool,
+    /// The tag_name of the release `--update` last installed (e.g. "dev",
+    /// "v0.3.1-beta.2", "v0.3.1") — tracked so re-running `--update` on an
+    /// unchanged channel is a no-op, and so switching to a less-tested
+    /// channel than what's currently installed can be flagged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_tag: Option<String>,
 }
 
 const KEYRING_SERVICE: &str = "ghx";
@@ -68,11 +74,12 @@ impl Config {
     /// config as a fallback (with a warning) so login still succeeds on
     /// systems with no secret-service backend.
     pub fn store_login(username: &str, token: &str) -> Result<()> {
+        let base = Config::load().unwrap_or_default();
         match keyring_entry(username)?.set_password(token) {
             Ok(()) => Config {
                 username: Some(username.to_string()),
                 token_fallback: None,
-                private_email: Config::load().map(|c| c.private_email).unwrap_or(false),
+                ..base
             }
             .save(),
             Err(e) => {
@@ -83,11 +90,23 @@ impl Config {
                 Config {
                     username: Some(username.to_string()),
                     token_fallback: Some(token.to_string()),
-                    private_email: Config::load().map(|c| c.private_email).unwrap_or(false),
+                    ..base
                 }
                 .save()
             }
         }
+    }
+
+    /// Records which release `--update` just installed, so the next run
+    /// can tell whether it's already current and whether a channel switch
+    /// would be a downgrade in stability.
+    pub fn set_installed_tag(tag: &str) -> Result<()> {
+        let base = Config::load().unwrap_or_default();
+        Config {
+            installed_tag: Some(tag.to_string()),
+            ..base
+        }
+        .save()
     }
 
     /// Forget the current login: removes the cached credential and clears

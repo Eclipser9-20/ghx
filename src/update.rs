@@ -1,4 +1,5 @@
 use crate::api::Client;
+use crate::config::Config;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::io::Write;
@@ -15,6 +16,30 @@ fn asset_name() -> Result<&'static str> {
         ("macos", "x86_64") => "ghx-macos-x86_64",
         (os, arch) => bail!("no release asset published for {os}/{arch}"),
     })
+}
+
+/// Channels form a stability ladder: dev (untested, can break at any
+/// time) -> beta (testing phase, harder to break) -> stable (fully
+/// tested, built for speed, no known instability). Rank is derived from
+/// a release's own tag_name rather than tracked separately, so it works
+/// the same way whether you got there via a channel name or an explicit
+/// version rollback.
+fn channel_rank(tag: &str) -> u8 {
+    if tag == "dev" {
+        0
+    } else if tag.contains("-beta.") {
+        1
+    } else {
+        2
+    }
+}
+
+fn channel_name(rank: u8) -> &'static str {
+    match rank {
+        0 => "dev",
+        1 => "beta",
+        _ => "stable",
+    }
 }
 
 fn find_release(client: &Client, channel: &str) -> Result<Value> {
@@ -35,7 +60,18 @@ fn find_release(client: &Client, channel: &str) -> Result<Value> {
                 })
                 .context("no beta release found")
         }
-        other => bail!("unknown channel '{other}' (expected stable, beta, or dev)"),
+        // Not a known channel name — treat it as an explicit release tag
+        // to roll back (or forward) to, e.g. `ghx --update v0.3.0`.
+        explicit => client
+            .get(&format!(
+                "/repos/{REPO_OWNER}/{REPO_NAME}/releases/tags/{explicit}"
+            ))
+            .or_else(|_| {
+                client.get(&format!(
+                    "/repos/{REPO_OWNER}/{REPO_NAME}/releases/tags/v{explicit}"
+                ))
+            })
+            .with_context(|| format!("no release found for '{explicit}' (expected stable, beta, dev, or an exact release tag)")),
     }
 }
 
@@ -83,15 +119,30 @@ fn ensure_maintenance_group() {
     }
 }
 
-pub fn run(client: &Client, channel: &str) -> Result<()> {
+pub fn run(client: &Client, channel: &str, yes: bool) -> Result<()> {
     ensure_maintenance_group();
     let channel = channel.to_ascii_lowercase();
     let release = find_release(client, &channel)?;
-    let tag = release["tag_name"].as_str().unwrap_or("?");
+    let tag = release["tag_name"].as_str().unwrap_or("?").to_string();
 
-    if tag == format!("v{}", env!("CARGO_PKG_VERSION")) {
-        println!("Already up to date (v{}).", env!("CARGO_PKG_VERSION"));
+    let installed_tag = Config::load().ok().and_then(|c| c.installed_tag);
+    if installed_tag.as_deref() == Some(tag.as_str()) {
+        println!("Already up to date ({tag}).");
         return Ok(());
+    }
+
+    if let Some(installed) = &installed_tag {
+        let installed_rank = channel_rank(installed);
+        let target_rank = channel_rank(&tag);
+        if target_rank < installed_rank && !yes {
+            bail!(
+                "{} is currently installed ({installed}); {} is less tested (dev: untested and can break \
+                 at any time; beta: testing phase; stable: fully tested, built for speed). \
+                 Re-run with --yes to switch anyway.",
+                channel_name(installed_rank),
+                channel_name(target_rank),
+            );
+        }
     }
 
     let asset_name = asset_name()?;
@@ -142,8 +193,10 @@ pub fn run(client: &Client, channel: &str) -> Result<()> {
     std::fs::rename(&staged, &current_exe).context("installing the new binary")?;
     let _ = std::fs::remove_file(&backup);
 
-    println!(
-        "Updated to {tag} ({channel} channel). The new version will be used next time you run ghx."
-    );
+    if let Err(e) = Config::set_installed_tag(&tag) {
+        eprintln!("warning: could not record the installed version: {e}");
+    }
+
+    println!("Updated to {tag}. The new version will be used next time you run ghx.");
     Ok(())
 }

@@ -23,9 +23,13 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
 
-    /// Update ghx to the latest release on a channel: stable, beta, or dev
+    /// Update ghx: stable, beta, dev, or an exact release tag to roll back/forward to
     #[arg(long, value_name = "CHANNEL")]
     update: Option<String>,
+
+    /// Allow --update to switch to a less-tested channel than what's installed
+    #[arg(long)]
+    yes: bool,
 
     /// Remove ghx (the installed binary, and credentials/config it stored)
     #[arg(long)]
@@ -315,7 +319,7 @@ fn run() -> Result<()> {
     if let Some(channel) = cli.update {
         let token = config::Config::resolve_token_no_keychain()?;
         let client = api::Client::new(token)?;
-        return update::run(&client, &channel);
+        return update::run(&client, &channel, cli.yes);
     }
 
     let Some(command) = cli.command else {
