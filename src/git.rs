@@ -9,6 +9,33 @@ use git2::{
 };
 use std::path::Path;
 
+/// Resolve the author/committer signature for commits and tags.
+///
+/// Privacy mode — enabled by the `GHX_PRIVATE_EMAIL` environment variable or the
+/// persisted `private_email` config flag — replaces the git-config email with the
+/// **authenticated user's own** GitHub no-reply address
+/// (`<login>@users.noreply.github.com`), so a real email address is never written
+/// into commit history. The name is preserved. Off by default.
+fn ghx_signature(repo: &Repository) -> Result<git2::Signature<'static>> {
+    let base = repo
+        .signature()
+        .context("could not determine author identity — set user.name/user.email")?;
+    let env_on = std::env::var("GHX_PRIVATE_EMAIL")
+        .map(|v| !v.is_empty() && v != "0" && v.to_lowercase() != "false")
+        .unwrap_or(false);
+    let cfg = Config::load().ok();
+    let cfg_on = cfg.as_ref().map(|c| c.private_email).unwrap_or(false);
+    if env_on || cfg_on {
+        if let Some(login) = cfg.and_then(|c| c.username) {
+            let name = base.name().unwrap_or(&login).to_string();
+            let email = format!("{login}@users.noreply.github.com");
+            return git2::Signature::now(&name, &email)
+                .context("building private-email signature");
+        }
+    }
+    Ok(base)
+}
+
 /// The owner/repo of a GitHub remote, plus the open repository handle.
 pub struct GhRepo {
     pub owner: String,
@@ -75,6 +102,58 @@ pub fn parse_slug(slug: &str) -> Result<(String, String)> {
 
 fn open_current() -> Result<Repository> {
     Repository::discover(".").context("not a git repository (or any parent up to the root)")
+}
+
+fn repo_workdir_path(repo: &Repository, relative: &str) -> std::path::PathBuf {
+    repo.workdir()
+        .map(|d| d.join(relative))
+        .unwrap_or_else(|| std::path::PathBuf::from(relative))
+}
+
+fn line_comment_token(path: &Path) -> Option<&'static str> {
+    match path.extension().and_then(|e| e.to_str())? {
+        "rs" | "c" | "h" | "cpp" | "hpp" | "cc" | "cs" | "java" | "js" | "jsx" | "ts" | "tsx"
+        | "go" | "zig" | "swift" | "kt" | "kts" | "dart" | "scala" | "php" => Some("//"),
+        "py" | "rb" | "sh" | "bash" | "zsh" | "yml" | "yaml" | "toml" | "pl" | "r" | "ps1" => {
+            Some("#")
+        }
+        "lua" | "sql" | "hs" => Some("--"),
+        _ => None,
+    }
+}
+
+/// A conflicting merge leaves raw `<<<<<<<`/`=======`/`>>>>>>>` markers in
+/// the working tree file, same as plain git — but those lines alone are
+/// enough to break compilation for source files, on top of the conflict
+/// itself. Prefixing them with the file's line-comment token keeps the
+/// marker lines themselves from being a syntax error; the disputed code
+/// between them still needs a human to resolve either way.
+fn comment_out_conflict_markers(path: &Path) -> Result<()> {
+    let Some(token) = line_comment_token(path) else {
+        return Ok(());
+    };
+    let content = std::fs::read_to_string(path)?;
+    let mut changed = false;
+    let rewritten: String = content
+        .lines()
+        .map(|line| {
+            if line.starts_with("<<<<<<<")
+                || line.starts_with("=======")
+                || line.starts_with(">>>>>>>")
+                || line.starts_with("|||||||")
+            {
+                changed = true;
+                format!("{token} {line}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if changed {
+        std::fs::write(path, rewritten + "\n")?;
+    }
+    Ok(())
 }
 
 /// Credential callback shared by fetch/push/clone: tries the stored GHX
@@ -405,9 +484,7 @@ pub fn add(paths: &[String]) -> Result<()> {
 
 pub fn commit(message: &str) -> Result<String> {
     let repo = open_current()?;
-    let sig = repo
-        .signature()
-        .context("could not determine author identity — set user.name/user.email")?;
+    let sig = ghx_signature(&repo)?;
     let mut index = repo.index()?;
     let tree_id = index.write_tree()?;
     let tree = repo.find_tree(tree_id)?;
@@ -658,9 +735,7 @@ pub fn push_tag(remote_name: &str, tag: &str) -> Result<()> {
 
 pub fn stash_save(message: Option<&str>) -> Result<()> {
     let mut repo = open_current()?;
-    let sig = repo
-        .signature()
-        .context("could not determine author identity — set user.name/user.email")?;
+    let sig = ghx_signature(&repo)?;
     repo.stash_save2(&sig, message, None)
         .context("nothing to stash (working tree clean?)")?;
     Ok(())
@@ -711,9 +786,7 @@ pub fn tag_create(name: &str, message: Option<&str>) -> Result<()> {
     let head = repo.head()?.peel_to_commit()?;
     match message {
         Some(msg) => {
-            let sig = repo
-                .signature()
-                .context("could not determine author identity — set user.name/user.email")?;
+            let sig = ghx_signature(&repo)?;
             repo.tag(name, head.as_object(), &sig, msg, false)?;
         }
         None => {
@@ -808,14 +881,23 @@ pub fn merge(branch: &str) -> Result<String> {
     repo.merge(&[&their_annotated], None, None)?;
     let mut index = repo.index()?;
     if index.has_conflicts() {
+        for entry in index.conflicts()? {
+            let entry = entry?;
+            let path = entry
+                .our
+                .or(entry.their)
+                .or(entry.ancestor)
+                .map(|e| String::from_utf8_lossy(&e.path).into_owned());
+            if let Some(path) = path {
+                let _ = comment_out_conflict_markers(&repo_workdir_path(&repo, &path));
+            }
+        }
         bail!("merge has conflicts — resolve them, then `ghx add` the fixed files and `ghx commit`");
     }
 
     let tree_id = index.write_tree()?;
     let tree = repo.find_tree(tree_id)?;
-    let sig = repo
-        .signature()
-        .context("could not determine author identity — set user.name/user.email")?;
+    let sig = ghx_signature(&repo)?;
     let head_commit = repo.head()?.peel_to_commit()?;
     let oid = repo.commit(
         Some("HEAD"),

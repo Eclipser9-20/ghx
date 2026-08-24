@@ -14,6 +14,11 @@ pub struct Config {
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_fallback: Option<String>,
+    /// When true, commits/tags use the authenticated user's GitHub no-reply
+    /// address instead of the git-config email, so a real email is never
+    /// written into history. Also enabled by the `GHX_PRIVATE_EMAIL` env var.
+    #[serde(default)]
+    pub private_email: bool,
 }
 
 const KEYRING_SERVICE: &str = "ghx";
@@ -67,6 +72,7 @@ impl Config {
             Ok(()) => Config {
                 username: Some(username.to_string()),
                 token_fallback: None,
+                private_email: Config::load().map(|c| c.private_email).unwrap_or(false),
             }
             .save(),
             Err(e) => {
@@ -77,6 +83,7 @@ impl Config {
                 Config {
                     username: Some(username.to_string()),
                     token_fallback: Some(token.to_string()),
+                    private_email: Config::load().map(|c| c.private_email).unwrap_or(false),
                 }
                 .save()
             }
