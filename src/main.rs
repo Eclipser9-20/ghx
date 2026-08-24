@@ -203,6 +203,9 @@ enum TuiPanel {
 }
 
 fn main() {
+    if std::env::var("GHX_UPDATE_TRACE").is_ok() {
+        eprintln!("[trace] process start");
+    }
     if let Err(e) = run() {
         eprintln!("error: {e:#}");
         std::process::exit(1);
@@ -228,12 +231,7 @@ fn run() -> Result<()> {
     }
 
     if let Some(channel) = cli.update {
-        // A token is only ever used here for a higher GitHub API rate
-        // limit — release downloads themselves are public and need no
-        // auth — so this skips the OS credential store entirely (env
-        // vars only) rather than risk a Keychain prompt/diagnostic on
-        // every update.
-        let token = config::Config::resolve_token_no_keychain().unwrap_or(None);
+        let token = config::Config::resolve_token()?;
         let client = api::Client::new(token)?;
         return update::run(&client, &channel);
     }
