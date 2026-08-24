@@ -344,7 +344,7 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    let cli = Cli::parse();
+    let cli = parse_with_correction(&raw)?;
 
     if cli.uninstall {
         return uninstall::run();
@@ -429,6 +429,77 @@ fn run() -> Result<()> {
         Command::Rm { spec, message, yes } => browse::rm(&client, &spec, &message, yes),
         _ => unreachable!(),
     }
+}
+
+/// Parse the command line, and on an unrecognized top-level subcommand only,
+/// retry once with the closest real command name substituted in. Every other
+/// parse failure (bad flags, missing arguments) still surfaces clap's own
+/// error, since guessing there would hide a real mistake.
+fn parse_with_correction(raw: &[String]) -> Result<Cli> {
+    let err = match Cli::try_parse() {
+        Ok(cli) => return Ok(cli),
+        Err(e) => e,
+    };
+    if err.kind() != clap::error::ErrorKind::InvalidSubcommand {
+        err.exit();
+    }
+
+    let Some(pos) = raw.iter().position(|a| !a.starts_with('-')) else {
+        err.exit();
+    };
+    let Some(correction) = closest_command(&raw[pos]) else {
+        err.exit();
+    };
+
+    eprintln!("Correcting to `ghx {correction}`...");
+    let mut argv: Vec<String> = vec!["ghx".to_string()];
+    argv.extend_from_slice(&raw[..pos]);
+    argv.push(correction);
+    argv.extend_from_slice(&raw[pos + 1..]);
+
+    match Cli::try_parse_from(argv) {
+        Ok(cli) => Ok(cli),
+        Err(e) => e.exit(),
+    }
+}
+
+/// The single closest real command name, if it's within two edits and
+/// strictly closer than every other candidate.
+fn closest_command(typed: &str) -> Option<String> {
+    use clap::CommandFactory;
+
+    let cmd = Cli::command();
+    let mut scored: Vec<(usize, String)> = cmd
+        .get_subcommands()
+        .map(|s| (levenshtein(typed, s.get_name()), s.get_name().to_string()))
+        .collect();
+    scored.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let (best, name) = scored.first()?.clone();
+    if best > 2 {
+        return None;
+    }
+    if scored.get(1).is_some_and(|(next, _)| *next == best) {
+        return None;
+    }
+    Some(name)
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+
+    for i in 1..=a.len() {
+        cur[0] = i;
+        for j in 1..=b.len() {
+            let sub = usize::from(a[i - 1] != b[j - 1]);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + sub);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 /// Builds and runs the panel set for `ghx tui`. `None` launches the full
