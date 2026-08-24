@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 use commands::{
     ai as aicmd, apicmd, auth, browse, filter as filtercmd, git as gitcmd, grep as grepcmd, issue, label,
     lfs as lfscmd, notifications, oops as oopscmd, org, pr, prune as prunecmd, repo,
-    run as runcmd, save as savecmd, webhook,
+    run as runcmd, save as savecmd, tree as treecmd, webhook,
 };
 
 #[derive(Parser)]
@@ -228,6 +228,14 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Draw commit history as a graph, or the tracked file tree
+    Tree {
+        #[arg(long, default_value_t = 30)]
+        limit: usize,
+        /// Show the file tree at HEAD instead of commit history
+        #[arg(long)]
+        files: bool,
+    },
     /// Undo a recent HEAD move using the reflog
     Oops {
         /// Which reflog step to go back to (1 = the most recent move)
@@ -401,6 +409,7 @@ fn run() -> Result<()> {
             yes,
         } => return filtercmd::run(path, invert_paths, replace_text, yes),
         Command::Ai { cmd } => return aicmd::run(cmd),
+        Command::Tree { limit, files } => return treecmd::run(limit, files),
         Command::Oops { index } => return oopscmd::run(index),
         Command::Prune { yes } => return prunecmd::run(yes),
         Command::Save { name, list } => return savecmd::save(name, list),

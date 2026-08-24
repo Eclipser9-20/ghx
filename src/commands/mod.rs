@@ -13,6 +13,7 @@ pub mod oops;
 pub mod org;
 pub mod prune;
 pub mod save;
+pub mod tree;
 pub mod pr;
 pub mod repo;
 pub mod run;
