@@ -21,6 +21,7 @@ pub struct StashPanel {
     view: View,
     message: String,
     status: Option<String>,
+    list_rect: Rect,
 }
 
 impl StashPanel {
@@ -31,6 +32,7 @@ impl StashPanel {
             view: View::List,
             message: String::new(),
             status: None,
+            list_rect: Rect::default(),
         };
         panel.reload();
         panel
@@ -159,7 +161,19 @@ impl Panel for StashPanel {
                     })),
             )
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        self.list_rect = area;
         frame.render_stateful_widget(list, area, &mut self.state);
+    }
+
+    fn select_at(&mut self, x: u16, y: u16) {
+        if let View::SaveMessage = self.view {
+            return;
+        }
+        if let Some(i) =
+            crate::tui::row_index_at(self.list_rect, self.state.offset(), self.entries.len(), x, y)
+        {
+            self.state.select(Some(i));
+        }
     }
 
     fn handle_input(&mut self, key: KeyEvent) -> Result<PanelSignal> {

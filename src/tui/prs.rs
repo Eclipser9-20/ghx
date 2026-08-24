@@ -26,6 +26,7 @@ pub struct PrsPanel {
     view: View,
     scroll: u16,
     error: Option<String>,
+    list_rect: Rect,
 }
 
 impl PrsPanel {
@@ -40,6 +41,7 @@ impl PrsPanel {
             view: View::List,
             scroll: 0,
             error: None,
+            list_rect: Rect::default(),
         };
         panel.reload();
         panel
@@ -131,6 +133,7 @@ impl PrsPanel {
         let list = List::new(items)
             .block(border(self.title(), focused))
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        self.list_rect = area;
         frame.render_stateful_widget(list, area, &mut self.state);
     }
 
@@ -219,6 +222,17 @@ impl Panel for PrsPanel {
         match self.view {
             View::List => self.render_list(frame, chunks[0], focused),
             View::Detail => self.render_detail(frame, chunks[0], focused),
+        }
+    }
+
+    fn select_at(&mut self, x: u16, y: u16) {
+        if !matches!(self.view, View::List) {
+            return;
+        }
+        if let Some(i) =
+            crate::tui::row_index_at(self.list_rect, self.state.offset(), self.prs.len(), x, y)
+        {
+            self.state.select(Some(i));
         }
     }
 

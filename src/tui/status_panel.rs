@@ -23,6 +23,7 @@ pub struct StatusPanel {
     view: View,
     message: String,
     status: Option<String>,
+    list_rect: Rect,
 }
 
 impl StatusPanel {
@@ -33,6 +34,7 @@ impl StatusPanel {
             view: View::List,
             message: String::new(),
             status: None,
+            list_rect: Rect::default(),
         };
         panel.reload();
         panel
@@ -171,6 +173,7 @@ impl StatusPanel {
                     .border_style(border_style),
             )
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        self.list_rect = area;
         frame.render_stateful_widget(list, area, &mut self.state);
     }
 
@@ -213,6 +216,17 @@ impl Panel for StatusPanel {
             View::List => self.render_list(frame, chunks[0], focused),
             View::Diff(diff) => diff.render(frame, chunks[0], focused),
             View::CommitMessage => self.render_commit_message(frame, chunks[0], focused),
+        }
+    }
+
+    fn select_at(&mut self, x: u16, y: u16) {
+        if !matches!(self.view, View::List) {
+            return;
+        }
+        if let Some(i) =
+            crate::tui::row_index_at(self.list_rect, self.state.offset(), self.files.len(), x, y)
+        {
+            self.state.select(Some(i));
         }
     }
 

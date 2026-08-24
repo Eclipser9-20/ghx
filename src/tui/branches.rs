@@ -27,6 +27,7 @@ pub struct BranchesPanel {
     state: ListState,
     status: Option<String>,
     mode: Mode,
+    list_rect: Rect,
 }
 
 impl BranchesPanel {
@@ -44,6 +45,7 @@ impl BranchesPanel {
             state,
             status: None,
             mode: Mode::Normal,
+            list_rect: Rect::default(),
         }
     }
 
@@ -214,7 +216,20 @@ impl Panel for BranchesPanel {
                     .border_style(border_style),
             )
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        self.list_rect = chunks[1];
         frame.render_stateful_widget(list, chunks[1], &mut self.state);
+    }
+
+    fn select_at(&mut self, x: u16, y: u16) {
+        if let Some(i) = crate::tui::row_index_at(
+            self.list_rect,
+            self.state.offset(),
+            self.filtered.len(),
+            x,
+            y,
+        ) {
+            self.state.select(Some(i));
+        }
     }
 
     fn handle_input(&mut self, key: KeyEvent) -> Result<PanelSignal> {

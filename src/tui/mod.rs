@@ -92,6 +92,66 @@ pub trait Panel {
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool);
     /// Handle one key event. Only called on the currently focused panel.
     fn handle_input(&mut self, key: KeyEvent) -> Result<PanelSignal>;
+    /// Move the selection to whatever row sits at these screen coordinates,
+    /// called just before a click is forwarded as Enter. Panels without a
+    /// selectable list leave this as the default no-op.
+    fn select_at(&mut self, _x: u16, _y: u16) {}
+}
+
+/// Index of the list row drawn at `y`, for a bordered list occupying `rect`
+/// and scrolled to `offset`. `None` when the point is outside the list's
+/// interior or past the last item.
+pub fn row_index_at(rect: Rect, offset: usize, len: usize, x: u16, y: u16) -> Option<usize> {
+    if x < rect.x || x >= rect.x + rect.width {
+        return None;
+    }
+    // The block's border occupies the first and last row of `rect`.
+    if y <= rect.y || y + 1 >= rect.y + rect.height {
+        return None;
+    }
+    let index = offset + (y - rect.y - 1) as usize;
+    (index < len).then_some(index)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect() -> Rect {
+        Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 10,
+        }
+    }
+
+    #[test]
+    fn borders_are_not_selectable() {
+        assert_eq!(row_index_at(rect(), 0, 20, 5, 0), None);
+        assert_eq!(row_index_at(rect(), 0, 20, 5, 9), None);
+    }
+
+    #[test]
+    fn first_interior_row_is_the_first_item() {
+        assert_eq!(row_index_at(rect(), 0, 20, 5, 1), Some(0));
+        assert_eq!(row_index_at(rect(), 0, 20, 5, 8), Some(7));
+    }
+
+    #[test]
+    fn scroll_offset_shifts_the_index() {
+        assert_eq!(row_index_at(rect(), 12, 20, 5, 1), Some(12));
+    }
+
+    #[test]
+    fn past_the_last_item_selects_nothing() {
+        assert_eq!(row_index_at(rect(), 0, 3, 5, 6), None);
+    }
+
+    #[test]
+    fn clicks_outside_the_horizontal_span_are_ignored() {
+        assert_eq!(row_index_at(rect(), 0, 20, 40, 3), None);
+    }
 }
 
 /// Owns the active panel set, which one has focus, and routes input.
@@ -231,6 +291,12 @@ impl App {
                     }
                 }
                 if Self::rect_contains(self.body_rect, mouse.column, mouse.row) {
+                    // Select the row actually under the cursor first, so a
+                    // click acts on what was clicked rather than on whatever
+                    // the keyboard selection happened to be.
+                    if let Some(panel) = self.panels.get_mut(self.focused) {
+                        panel.select_at(mouse.column, mouse.row);
+                    }
                     let key = KeyEvent::from(KeyCode::Enter);
                     self.dispatch_key(key)?;
                 }

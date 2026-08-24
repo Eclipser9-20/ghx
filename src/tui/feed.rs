@@ -27,6 +27,7 @@ pub struct FeedPanel {
     exhausted: bool,
     loading: bool,
     error: Option<String>,
+    list_rect: Rect,
 }
 
 impl FeedPanel {
@@ -39,6 +40,7 @@ impl FeedPanel {
             exhausted: false,
             loading: false,
             error: None,
+            list_rect: Rect::default(),
         };
         panel.load_next_page();
         panel
@@ -186,7 +188,17 @@ impl Panel for FeedPanel {
         let list = List::new(items)
             .block(border(&title, focused))
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        self.list_rect = area;
         frame.render_stateful_widget(list, area, &mut self.state);
+    }
+
+    fn select_at(&mut self, x: u16, y: u16) {
+        if let Some(i) =
+            crate::tui::row_index_at(self.list_rect, self.state.offset(), self.items.len(), x, y)
+        {
+            self.state.select(Some(i));
+            self.maybe_prefetch();
+        }
     }
 
     fn handle_input(&mut self, key: KeyEvent) -> Result<PanelSignal> {
