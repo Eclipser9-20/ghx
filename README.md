@@ -76,6 +76,21 @@ or the Linux Secret Service) keyed by username. On a machine with no reachable c
 store, ghx falls back to a plaintext config file with a warning. `GHX_TOKEN`, `GH_TOKEN`,
 and `GITHUB_TOKEN` environment variables all take precedence over a stored login.
 
+## Private email
+
+Commits and tags normally use the name and email from your git config. To keep a real
+email address out of history, enable privacy mode and ghx will instead sign commits with
+**your** GitHub no-reply address (`<your-login>@users.noreply.github.com`), derived from
+the authenticated account:
+
+```
+GHX_PRIVATE_EMAIL=1 ghx commit -m "..."      # per-invocation / per-environment
+```
+
+or set it persistently in ghx's config file (`private_email: true`). It is off by default,
+so normal behaviour is unchanged. This is useful when multiple machines or tools commit on
+your behalf and you don't want to configure `user.email` on each one.
+
 ## AI-generated commit messages
 
 `ghx commit --generate` sends the staged diff to an AI backend and uses the result as the

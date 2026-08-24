@@ -9,6 +9,33 @@ use git2::{
 };
 use std::path::Path;
 
+/// Resolve the author/committer signature for commits and tags.
+///
+/// Privacy mode — enabled by the `GHX_PRIVATE_EMAIL` environment variable or the
+/// persisted `private_email` config flag — replaces the git-config email with the
+/// **authenticated user's own** GitHub no-reply address
+/// (`<login>@users.noreply.github.com`), so a real email address is never written
+/// into commit history. The name is preserved. Off by default.
+fn ghx_signature(repo: &Repository) -> Result<git2::Signature<'static>> {
+    let base = repo
+        .signature()
+        .context("could not determine author identity — set user.name/user.email")?;
+    let env_on = std::env::var("GHX_PRIVATE_EMAIL")
+        .map(|v| !v.is_empty() && v != "0" && v.to_lowercase() != "false")
+        .unwrap_or(false);
+    let cfg = Config::load().ok();
+    let cfg_on = cfg.as_ref().map(|c| c.private_email).unwrap_or(false);
+    if env_on || cfg_on {
+        if let Some(login) = cfg.and_then(|c| c.username) {
+            let name = base.name().unwrap_or(&login).to_string();
+            let email = format!("{login}@users.noreply.github.com");
+            return git2::Signature::now(&name, &email)
+                .context("building private-email signature");
+        }
+    }
+    Ok(base)
+}
+
 /// The owner/repo of a GitHub remote, plus the open repository handle.
 pub struct GhRepo {
     pub owner: String,
@@ -405,9 +432,7 @@ pub fn add(paths: &[String]) -> Result<()> {
 
 pub fn commit(message: &str) -> Result<String> {
     let repo = open_current()?;
-    let sig = repo
-        .signature()
-        .context("could not determine author identity — set user.name/user.email")?;
+    let sig = ghx_signature(&repo)?;
     let mut index = repo.index()?;
     let tree_id = index.write_tree()?;
     let tree = repo.find_tree(tree_id)?;
@@ -658,9 +683,7 @@ pub fn push_tag(remote_name: &str, tag: &str) -> Result<()> {
 
 pub fn stash_save(message: Option<&str>) -> Result<()> {
     let mut repo = open_current()?;
-    let sig = repo
-        .signature()
-        .context("could not determine author identity — set user.name/user.email")?;
+    let sig = ghx_signature(&repo)?;
     repo.stash_save2(&sig, message, None)
         .context("nothing to stash (working tree clean?)")?;
     Ok(())
@@ -711,9 +734,7 @@ pub fn tag_create(name: &str, message: Option<&str>) -> Result<()> {
     let head = repo.head()?.peel_to_commit()?;
     match message {
         Some(msg) => {
-            let sig = repo
-                .signature()
-                .context("could not determine author identity — set user.name/user.email")?;
+            let sig = ghx_signature(&repo)?;
             repo.tag(name, head.as_object(), &sig, msg, false)?;
         }
         None => {
@@ -813,9 +834,7 @@ pub fn merge(branch: &str) -> Result<String> {
 
     let tree_id = index.write_tree()?;
     let tree = repo.find_tree(tree_id)?;
-    let sig = repo
-        .signature()
-        .context("could not determine author identity — set user.name/user.email")?;
+    let sig = ghx_signature(&repo)?;
     let head_commit = repo.head()?.peel_to_commit()?;
     let oid = repo.commit(
         Some("HEAD"),
