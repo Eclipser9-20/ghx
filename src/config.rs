@@ -19,9 +19,15 @@ pub struct Config {
 const KEYRING_SERVICE: &str = "ghx";
 
 fn config_path() -> Result<PathBuf> {
+    #[cfg(windows)]
     let dir = dirs::config_dir()
         .context("could not determine config directory")?
         .join("ghx");
+    #[cfg(not(windows))]
+    let dir = dirs::home_dir()
+        .context("could not determine home directory")?
+        .join(".ghx");
+
     Ok(dir.join("config.json"))
 }
 
