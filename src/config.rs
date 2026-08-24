@@ -89,6 +89,24 @@ impl Config {
         Config::default().save()
     }
 
+    /// Env vars and the plaintext config fallback only — no OS credential
+    /// store access. Confirmed via GHX_UPDATE_TRACE that the Keychain
+    /// lookup inside `resolve_token` is what prints a native "Username
+    /// and password must be provided" diagnostic straight to stderr on
+    /// macOS, independent of the Result it returns — so callers that can
+    /// do without a cached login (a token here is a nice-to-have for a
+    /// higher API rate limit, not a requirement) should use this instead.
+    pub fn resolve_token_no_keychain() -> Result<Option<String>> {
+        for var in ["GHX_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] {
+            if let Ok(t) = std::env::var(var) {
+                if !t.is_empty() {
+                    return Ok(Some(t));
+                }
+            }
+        }
+        Ok(Self::load()?.token_fallback)
+    }
+
     /// Resolve the token to use: env vars take precedence over the cached
     /// login, matching gh's own GH_TOKEN/GITHUB_TOKEN precedence
     /// convention. Falls back to the OS credential store entry for the

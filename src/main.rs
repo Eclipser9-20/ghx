@@ -203,9 +203,6 @@ enum TuiPanel {
 }
 
 fn main() {
-    if std::env::var("GHX_UPDATE_TRACE").is_ok() {
-        eprintln!("[trace] process start");
-    }
     if let Err(e) = run() {
         eprintln!("error: {e:#}");
         std::process::exit(1);
@@ -231,7 +228,7 @@ fn run() -> Result<()> {
     }
 
     if let Some(channel) = cli.update {
-        let token = config::Config::resolve_token()?;
+        let token = config::Config::resolve_token_no_keychain()?;
         let client = api::Client::new(token)?;
         return update::run(&client, &channel);
     }
