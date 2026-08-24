@@ -89,24 +89,6 @@ impl Config {
         Config::default().save()
     }
 
-    /// Env vars and the plaintext config fallback only — no OS credential
-    /// store access. Some macOS Security framework calls print a native
-    /// diagnostic straight to stderr as a side effect of the Keychain
-    /// lookup itself, before this crate's Result even comes back, so
-    /// callers that can do without a cached login (anything that treats
-    /// the token as a nice-to-have, not a requirement) should use this
-    /// instead of `resolve_token` to avoid touching the Keychain at all.
-    pub fn resolve_token_no_keychain() -> Result<Option<String>> {
-        for var in ["GHX_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] {
-            if let Ok(t) = std::env::var(var) {
-                if !t.is_empty() {
-                    return Ok(Some(t));
-                }
-            }
-        }
-        Ok(Self::load()?.token_fallback)
-    }
-
     /// Resolve the token to use: env vars take precedence over the cached
     /// login, matching gh's own GH_TOKEN/GITHUB_TOKEN precedence
     /// convention. Falls back to the OS credential store entry for the
