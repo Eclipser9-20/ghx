@@ -15,7 +15,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
     ai as aicmd, apicmd, auth, browse, filter as filtercmd, git as gitcmd, grep as grepcmd, issue, label,
-    lfs as lfscmd, notifications, org, pr, repo, run as runcmd, webhook,
+    lfs as lfscmd, notifications, oops as oopscmd, org, pr, prune as prunecmd, repo,
+    run as runcmd, save as savecmd, webhook,
 };
 
 #[derive(Parser)]
@@ -227,6 +228,26 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Undo a recent HEAD move using the reflog
+    Oops {
+        /// Which reflog step to go back to (1 = the most recent move)
+        index: Option<usize>,
+    },
+    /// Delete local branches that are gone from origin and already merged
+    Prune {
+        /// Actually delete the branches (without this, only a dry-run list is printed)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Snapshot the working tree (tracked and untracked) into a named slot
+    Save {
+        name: Option<String>,
+        /// Show saved slots
+        #[arg(long)]
+        list: bool,
+    },
+    /// Restore a named snapshot, switching back to the branch it came from
+    Load { name: String },
     /// AI-assisted helpers over the current diff
     Ai {
         #[command(subcommand)]
@@ -380,6 +401,10 @@ fn run() -> Result<()> {
             yes,
         } => return filtercmd::run(path, invert_paths, replace_text, yes),
         Command::Ai { cmd } => return aicmd::run(cmd),
+        Command::Oops { index } => return oopscmd::run(index),
+        Command::Prune { yes } => return prunecmd::run(yes),
+        Command::Save { name, list } => return savecmd::save(name, list),
+        Command::Load { name } => return savecmd::load(&name),
         Command::Grep { pattern, path } => return grepcmd::run(&pattern, path),
         Command::Tui { panel } => return run_tui(panel),
         _ => {}

@@ -595,6 +595,22 @@ pub fn fetch(remote_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Fetch with pruning, so remote-tracking refs for branches deleted on the
+/// remote actually disappear locally.
+pub fn fetch_pruned(remote_name: &str) -> Result<()> {
+    let repo = open_current()?;
+    let mut remote = repo
+        .find_remote(remote_name)
+        .with_context(|| format!("no remote named '{remote_name}'"))?;
+    let mut fo = FetchOptions::new();
+    fo.remote_callbacks(remote_callbacks());
+    fo.prune(git2::FetchPrune::On);
+    remote
+        .fetch(&[] as &[&str], Some(&mut fo), None)
+        .with_context(|| format!("fetching from {remote_name}"))?;
+    Ok(())
+}
+
 /// Fetch then fast-forward the current branch. Non-fast-forward states
 /// (diverged history) are reported rather than silently merged, since a
 /// real merge/rebase is a deliberate future feature, not a quiet default.
