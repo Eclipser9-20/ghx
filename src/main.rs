@@ -282,6 +282,8 @@ enum TuiPanel {
     },
     /// Stash panel only
     Stash,
+    /// GitHub activity feed panel only, with infinite scroll
+    Feed,
 }
 
 fn main() {
@@ -418,16 +420,20 @@ fn run_tui(panel: Option<TuiPanel>) -> Result<()> {
         Some(TuiPanel::Stash) => {
             vec![Box::new(tui::StashPanel::new())]
         }
+        Some(TuiPanel::Feed) => {
+            let token = config::Config::resolve_token()?;
+            let client = api::Client::new(token)?;
+            vec![Box::new(tui::FeedPanel::new(client))]
+        }
         None => {
             let mut panels: Vec<Box<dyn tui::Panel>> = Vec::new();
 
             panels.push(Box::new(tui::StatusPanel::new()));
             panels.push(Box::new(tui::LogPanel::new(100)));
 
-            if let (Ok(Some(token)), Ok(repo)) =
-                (config::Config::resolve_token(), git::GhRepo::detect())
-            {
-                if let Ok(client) = api::Client::new(Some(token)) {
+            let token = config::Config::resolve_token();
+            if let (Ok(Some(token)), Ok(repo)) = (&token, git::GhRepo::detect()) {
+                if let Ok(client) = api::Client::new(Some(token.clone())) {
                     panels.push(Box::new(tui::PrsPanel::new(client, repo.owner, repo.name)));
                 }
             }
@@ -436,6 +442,12 @@ fn run_tui(panel: Option<TuiPanel>) -> Result<()> {
             panels.push(Box::new(tui::DiffPanel::new(&diff_text)));
             panels.push(Box::new(tui::BranchesPanel::new()));
             panels.push(Box::new(tui::StashPanel::new()));
+
+            if let Ok(Some(gh_token)) = token {
+                if let Ok(client) = api::Client::new(Some(gh_token)) {
+                    panels.push(Box::new(tui::FeedPanel::new(client)));
+                }
+            }
             panels
         }
     };

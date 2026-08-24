@@ -109,7 +109,7 @@ impl Panel for StashPanel {
 
     fn key_hints(&self) -> &str {
         match self.view {
-            View::List => "j/k: move  Enter: apply+drop  d: drop  s: save new  r: refresh",
+            View::List => "j/k: move  gg/G: top/bottom  Enter: apply+drop  d: drop  s: save new  r: refresh",
             View::SaveMessage => "type message (optional)  Enter: save  Esc: cancel",
         }
     }
@@ -196,6 +196,18 @@ impl Panel for StashPanel {
                 KeyCode::Up | KeyCode::Char('k') => {
                     let next = self.state.selected().map_or(0, |i| i.saturating_sub(1));
                     self.state.select(Some(next));
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Char('g') => {
+                    if !self.entries.is_empty() {
+                        self.state.select(Some(0));
+                    }
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Char('G') => {
+                    if !self.entries.is_empty() {
+                        self.state.select(Some(self.entries.len() - 1));
+                    }
                     Ok(PanelSignal::Handled)
                 }
                 KeyCode::Enter => {

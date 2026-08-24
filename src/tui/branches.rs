@@ -11,12 +11,22 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+/// A real modal distinction, nvim-style: `Normal` is for navigation (hjkl,
+/// gg/G, Enter, Esc/q to leave the panel to the app), `Insert` is entered
+/// via `i` or `/` and is the only mode where typed characters edit the
+/// filter text.
+enum Mode {
+    Normal,
+    Insert,
+}
+
 pub struct BranchesPanel {
     all: Vec<(String, bool)>,
     filter: String,
     filtered: Vec<usize>,
     state: ListState,
     status: Option<String>,
+    mode: Mode,
 }
 
 impl BranchesPanel {
@@ -33,6 +43,7 @@ impl BranchesPanel {
             filtered,
             state,
             status: None,
+            mode: Mode::Normal,
         }
     }
 
@@ -58,6 +69,19 @@ impl BranchesPanel {
         let idx = self.state.selected()?;
         let real = *self.filtered.get(idx)?;
         self.all.get(real).map(|(n, _)| n.as_str())
+    }
+
+    fn checkout_selected(&mut self) {
+        if let Some(name) = self.selected_name().map(str::to_string) {
+            match git::checkout(&name) {
+                Ok(()) => {
+                    self.status = Some(format!("switched to {name}"));
+                    self.all = git::branch_list().unwrap_or_default();
+                    self.refilter();
+                }
+                Err(e) => self.status = Some(format!("error: {e}")),
+            }
+        }
     }
 }
 
@@ -118,7 +142,10 @@ impl Panel for BranchesPanel {
     }
 
     fn key_hints(&self) -> &str {
-        "type to filter  up/down: move  Enter: checkout  Backspace: clear"
+        match self.mode {
+            Mode::Normal => "j/k: move  gg/G: top/bottom  /  i: filter  Enter/l: checkout",
+            Mode::Insert => "type to filter  Esc: back to normal mode",
+        }
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, focused: bool) {
@@ -130,17 +157,25 @@ impl Panel for BranchesPanel {
             .constraints([Constraint::Length(3), Constraint::Min(1)])
             .split(area);
 
+        let filter_title = match self.mode {
+            Mode::Insert => "filter -- INSERT --",
+            Mode::Normal => "filter",
+        };
         let filter_text = if self.filter.is_empty() {
-            "(type to filter)".to_string()
+            "(i or / to filter)".to_string()
         } else {
             self.filter.clone()
+        };
+        let filter_style = match self.mode {
+            Mode::Insert => Style::default().fg(Color::Rgb(palette::GREEN.0, palette::GREEN.1, palette::GREEN.2)),
+            Mode::Normal => border_style,
         };
         frame.render_widget(
             Paragraph::new(filter_text).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("filter")
-                    .border_style(border_style),
+                    .title(filter_title)
+                    .border_style(filter_style),
             ),
             chunks[0],
         );
@@ -183,48 +218,69 @@ impl Panel for BranchesPanel {
     }
 
     fn handle_input(&mut self, key: KeyEvent) -> Result<PanelSignal> {
-        match key.code {
-            KeyCode::Down => {
-                let len = self.filtered.len();
-                if len > 0 {
-                    let next = self.state.selected().map_or(0, |i| (i + 1).min(len - 1));
-                    self.state.select(Some(next));
+        match self.mode {
+            Mode::Insert => match key.code {
+                KeyCode::Esc => {
+                    self.mode = Mode::Normal;
+                    Ok(PanelSignal::Handled)
                 }
-                Ok(PanelSignal::Handled)
-            }
-            KeyCode::Up => {
-                let next = self.state.selected().map_or(0, |i| i.saturating_sub(1));
-                self.state.select(Some(next));
-                Ok(PanelSignal::Handled)
-            }
-            KeyCode::Backspace => {
-                self.filter.pop();
-                self.refilter();
-                Ok(PanelSignal::Handled)
-            }
-            KeyCode::Enter => {
-                if let Some(name) = self.selected_name().map(str::to_string) {
-                    match git::checkout(&name) {
-                        Ok(()) => {
-                            self.status = Some(format!("switched to {name}"));
-                            self.all = git::branch_list().unwrap_or_default();
-                            self.refilter();
-                        }
-                        Err(e) => self.status = Some(format!("error: {e}")),
+                KeyCode::Enter => {
+                    self.mode = Mode::Normal;
+                    self.checkout_selected();
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Backspace => {
+                    self.filter.pop();
+                    self.refilter();
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let _ = c;
+                    Ok(PanelSignal::Ignored)
+                }
+                KeyCode::Char(c) => {
+                    self.filter.push(c);
+                    self.refilter();
+                    Ok(PanelSignal::Handled)
+                }
+                _ => Ok(PanelSignal::Ignored),
+            },
+            Mode::Normal => match key.code {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let len = self.filtered.len();
+                    if len > 0 {
+                        let next = self.state.selected().map_or(0, |i| (i + 1).min(len - 1));
+                        self.state.select(Some(next));
                     }
+                    Ok(PanelSignal::Handled)
                 }
-                Ok(PanelSignal::Handled)
-            }
-            KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let _ = c;
-                Ok(PanelSignal::Ignored)
-            }
-            KeyCode::Char(c) => {
-                self.filter.push(c);
-                self.refilter();
-                Ok(PanelSignal::Handled)
-            }
-            _ => Ok(PanelSignal::Ignored),
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let next = self.state.selected().map_or(0, |i| i.saturating_sub(1));
+                    self.state.select(Some(next));
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Char('g') => {
+                    if !self.filtered.is_empty() {
+                        self.state.select(Some(0));
+                    }
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Char('G') => {
+                    if !self.filtered.is_empty() {
+                        self.state.select(Some(self.filtered.len() - 1));
+                    }
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Char('i') | KeyCode::Char('/') => {
+                    self.mode = Mode::Insert;
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+                    self.checkout_selected();
+                    Ok(PanelSignal::Handled)
+                }
+                _ => Ok(PanelSignal::Ignored),
+            },
         }
     }
 }

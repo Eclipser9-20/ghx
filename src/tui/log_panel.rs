@@ -79,7 +79,7 @@ impl Panel for LogPanel {
 
     fn key_hints(&self) -> &str {
         match self.view {
-            View::List => "j/k: move  Enter: view diff  r: refresh",
+            View::List => "j/k: move  gg/G: top/bottom  Enter/l: view diff  r: refresh",
             View::Diff(_) => "j/k: scroll  Esc: back",
         }
     }
@@ -131,7 +131,7 @@ impl Panel for LogPanel {
     fn handle_input(&mut self, key: KeyEvent) -> Result<PanelSignal> {
         match &mut self.view {
             View::Diff(diff) => match key.code {
-                KeyCode::Esc => {
+                KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => {
                     self.view = View::List;
                     Ok(PanelSignal::Handled)
                 }
@@ -151,7 +151,19 @@ impl Panel for LogPanel {
                     self.state.select(Some(next));
                     Ok(PanelSignal::Handled)
                 }
-                KeyCode::Enter => {
+                KeyCode::Char('g') => {
+                    if !self.entries.is_empty() {
+                        self.state.select(Some(0));
+                    }
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Char('G') => {
+                    if !self.entries.is_empty() {
+                        self.state.select(Some(self.entries.len() - 1));
+                    }
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
                     self.open_diff();
                     Ok(PanelSignal::Handled)
                 }

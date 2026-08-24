@@ -19,6 +19,7 @@
 
 mod branches;
 mod diff_panel;
+mod feed;
 mod log_panel;
 mod markdown;
 mod prs;
@@ -27,18 +28,21 @@ mod status_panel;
 
 pub use branches::BranchesPanel;
 pub use diff_panel::DiffPanel;
+pub use feed::FeedPanel;
 pub use log_panel::LogPanel;
 pub use prs::PrsPanel;
 pub use stash_panel::StashPanel;
 pub use status_panel::StatusPanel;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use ratatui::layout::{Constraint, Direction, Layout as RLayout, Rect};
+use ratatui::layout::Rect;
 use ratatui::prelude::CrosstermBackend;
 use ratatui::Frame;
 use ratatui::Terminal;
@@ -88,80 +92,94 @@ pub trait Panel {
     fn handle_input(&mut self, key: KeyEvent) -> Result<PanelSignal>;
 }
 
-/// Arranges N active panels on screen. Single panel fills the whole area;
-/// multiple panels are tiled in a grid that grows by rows as the count
-/// increases, so composition is not limited to any fixed number of panels.
-pub struct Layout;
-
-impl Layout {
-    pub fn split(area: Rect, count: usize) -> Vec<Rect> {
-        if count == 0 {
-            return Vec::new();
-        }
-        if count == 1 {
-            return vec![area];
-        }
-
-        // Aim for a roughly square grid: cols = ceil(sqrt(count)).
-        let cols = (count as f64).sqrt().ceil() as usize;
-        let rows = count.div_ceil(cols);
-
-        let row_areas = RLayout::default()
-            .direction(Direction::Vertical)
-            .constraints(vec![Constraint::Ratio(1, rows as u32); rows])
-            .split(area);
-
-        let mut out = Vec::with_capacity(count);
-        let mut remaining = count;
-        for row_area in row_areas.iter() {
-            let cols_in_row = cols.min(remaining);
-            let col_areas = RLayout::default()
-                .direction(Direction::Horizontal)
-                .constraints(vec![Constraint::Ratio(1, cols_in_row as u32); cols_in_row])
-                .split(*row_area);
-            out.extend(col_areas.iter().copied());
-            remaining -= cols_in_row;
-        }
-        out
-    }
-}
-
 /// Owns the active panel set, which one has focus, and routes input.
+///
+/// Multiple panels are presented as a persistent top tab bar (one cell per
+/// panel, click or Tab/Alt+N to switch) over a single main content pane
+/// showing the focused panel — a "sidebar" reads better as a top bar in a
+/// terminal's wide-short aspect ratio than a narrow side column would.
 pub struct App {
     panels: Vec<Box<dyn Panel>>,
     focused: usize,
+    /// Clickable screen rect for each tab, rebuilt every frame so mouse
+    /// clicks can be hit-tested against last frame's actual layout.
+    tab_rects: Vec<Rect>,
+    /// The main content pane's rect, so scroll events landing there can be
+    /// forwarded to the focused panel as synthetic movement keys.
+    body_rect: Rect,
 }
 
 impl App {
     pub fn new(panels: Vec<Box<dyn Panel>>) -> Self {
-        Self { panels, focused: 0 }
+        Self {
+            panels,
+            focused: 0,
+            tab_rects: Vec::new(),
+            body_rect: Rect::default(),
+        }
     }
 
     fn draw(&mut self, frame: &mut Frame) {
+        use ratatui::style::{Color, Modifier, Style};
+        use ratatui::text::{Line, Span};
+        use ratatui::widgets::Paragraph;
+
         let size = frame.area();
         let footer_h = 1;
+        let tabs_h = if self.panels.len() > 1 { 1 } else { 0 };
+
+        let tabs_area = Rect {
+            height: tabs_h,
+            ..size
+        };
         let body = Rect {
-            height: size.height.saturating_sub(footer_h),
+            y: size.y + tabs_h,
+            height: size.height.saturating_sub(footer_h + tabs_h),
             ..size
         };
         let footer = Rect {
-            y: size.y + body.height,
+            y: size.y + tabs_h + body.height,
             height: footer_h,
             ..size
         };
+        self.body_rect = body;
 
-        let areas = Layout::split(body, self.panels.len());
-        for (i, (panel, area)) in self.panels.iter_mut().zip(areas).enumerate() {
-            panel.render(frame, area, i == self.focused);
+        if self.panels.len() > 1 {
+            self.tab_rects.clear();
+            let (cyan_r, cyan_g, cyan_b) = palette::CYAN;
+            let (comment_r, comment_g, comment_b) = palette::COMMENT;
+            let mut spans = Vec::new();
+            let mut x = tabs_area.x;
+            for (i, panel) in self.panels.iter().enumerate() {
+                let label = format!(" {} ", panel.title());
+                let width = label.chars().count() as u16;
+                self.tab_rects.push(Rect {
+                    x,
+                    y: tabs_area.y,
+                    width,
+                    height: 1,
+                });
+                x += width;
+                let style = if i == self.focused {
+                    Style::default()
+                        .fg(Color::Rgb(cyan_r, cyan_g, cyan_b))
+                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else {
+                    Style::default().fg(Color::Rgb(comment_r, comment_g, comment_b))
+                };
+                spans.push(Span::styled(label, style));
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)), tabs_area);
+        }
+
+        if let Some(panel) = self.panels.get_mut(self.focused) {
+            panel.render(frame, body, true);
         }
 
         if let Some(panel) = self.panels.get(self.focused) {
-            use ratatui::style::{Color, Style};
-            use ratatui::text::Line;
-            use ratatui::widgets::Paragraph;
             let (r, g, b) = palette::COMMENT;
             let switch_hint = if self.panels.len() > 1 {
-                "Tab/Shift+Tab: switch panel  Alt+1-9: jump to panel  "
+                "Tab/click: switch panel  Alt+1-9: jump  "
             } else {
                 ""
             };
@@ -178,17 +196,102 @@ impl App {
     pub fn run(mut self) -> Result<()> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen, event::EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
         let result = self.event_loop(&mut terminal);
 
+        execute!(terminal.backend_mut(), event::DisableMouseCapture)?;
         disable_raw_mode()?;
         execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
         terminal.show_cursor()?;
 
         result
+    }
+
+    fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
+        x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
+    }
+
+    /// Handles a mouse event: clicking a tab switches the focused panel,
+    /// clicking inside the body focuses it (a no-op in single-panel mode)
+    /// and forwards the click as a synthetic Enter so list items become
+    /// clickable-to-select-and-open, and the scroll wheel forwards as
+    /// repeated Up/Down to whatever panel is focused.
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> Result<Option<()>> {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                for (i, rect) in self.tab_rects.iter().enumerate() {
+                    if Self::rect_contains(*rect, mouse.column, mouse.row) {
+                        self.focused = i;
+                        return Ok(None);
+                    }
+                }
+                if Self::rect_contains(self.body_rect, mouse.column, mouse.row) {
+                    let key = KeyEvent::from(KeyCode::Enter);
+                    self.dispatch_key(key)?;
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                for _ in 0..3 {
+                    self.dispatch_key(KeyEvent::from(KeyCode::Down))?;
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                for _ in 0..3 {
+                    self.dispatch_key(KeyEvent::from(KeyCode::Up))?;
+                }
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    /// Routes one key through the focused panel, then the global fallback
+    /// bindings, exactly like a keyboard-originated key would be. Shared by
+    /// the real event loop and by mouse events synthesized into key presses
+    /// (a click-to-select, a scroll tick), so both input paths behave
+    /// identically to panels.
+    fn dispatch_key(&mut self, key: KeyEvent) -> Result<Option<()>> {
+        if key.code == KeyCode::Tab && self.panels.len() > 1 {
+            self.focused = (self.focused + 1) % self.panels.len();
+            return Ok(None);
+        }
+        if key.code == KeyCode::BackTab && self.panels.len() > 1 {
+            self.focused = (self.focused + self.panels.len() - 1) % self.panels.len();
+            return Ok(None);
+        }
+        // Alt+<digit> jumps straight to a panel by position, without
+        // colliding with plain digit characters typed into a panel's own
+        // text input (commit message, stash message, filter box).
+        if key.modifiers.contains(event::KeyModifiers::ALT) {
+            if let KeyCode::Char(c @ '1'..='9') = key.code {
+                let idx = c as usize - '1' as usize;
+                if idx < self.panels.len() {
+                    self.focused = idx;
+                    return Ok(None);
+                }
+            }
+        }
+
+        if let Some(panel) = self.panels.get_mut(self.focused) {
+            match panel.handle_input(key)? {
+                PanelSignal::Quit => return Ok(Some(())),
+                PanelSignal::Handled => return Ok(None),
+                PanelSignal::Ignored => {}
+            }
+        }
+
+        // Global fallback keys, only if the focused panel didn't want the key.
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => return Ok(Some(())),
+            KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                return Ok(Some(()))
+            }
+            _ => {}
+        }
+        Ok(None)
     }
 
     fn event_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
@@ -198,47 +301,19 @@ impl App {
             if !event::poll(Duration::from_millis(200))? {
                 continue;
             }
-            let Event::Key(key) = event::read()? else {
-                continue;
-            };
-            if key.kind != KeyEventKind::Press {
-                continue;
-            }
-
-            if key.code == KeyCode::Tab && self.panels.len() > 1 {
-                self.focused = (self.focused + 1) % self.panels.len();
-                continue;
-            }
-            if key.code == KeyCode::BackTab && self.panels.len() > 1 {
-                self.focused = (self.focused + self.panels.len() - 1) % self.panels.len();
-                continue;
-            }
-            // Alt+<digit> jumps straight to a panel by position, without
-            // colliding with plain digit characters typed into a panel's
-            // own text input (commit message, stash message, filter box).
-            if key.modifiers.contains(event::KeyModifiers::ALT) {
-                if let KeyCode::Char(c @ '1'..='9') = key.code {
-                    let idx = c as usize - '1' as usize;
-                    if idx < self.panels.len() {
-                        self.focused = idx;
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
                         continue;
                     }
+                    if self.dispatch_key(key)?.is_some() {
+                        return Ok(());
+                    }
                 }
-            }
-
-            if let Some(panel) = self.panels.get_mut(self.focused) {
-                match panel.handle_input(key)? {
-                    PanelSignal::Quit => return Ok(()),
-                    PanelSignal::Handled => continue,
-                    PanelSignal::Ignored => {}
-                }
-            }
-
-            // Global fallback keys, only if the focused panel didn't want the key.
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                    return Ok(())
+                Event::Mouse(mouse) => {
+                    if self.handle_mouse(mouse)?.is_some() {
+                        return Ok(());
+                    }
                 }
                 _ => {}
             }

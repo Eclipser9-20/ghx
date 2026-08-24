@@ -204,8 +204,8 @@ impl Panel for PrsPanel {
 
     fn key_hints(&self) -> &str {
         match self.view {
-            View::List => "j/k: move  Enter: view  r: refresh",
-            View::Detail => "j/k: scroll  Esc: back",
+            View::List => "j/k: move  gg/G: top/bottom  Enter/l: view  r: refresh",
+            View::Detail => "j/k: scroll  Esc/h: back",
         }
     }
 
@@ -238,7 +238,19 @@ impl Panel for PrsPanel {
                     self.state.select(Some(next));
                     Ok(PanelSignal::Handled)
                 }
-                KeyCode::Enter => {
+                KeyCode::Char('g') => {
+                    if !self.prs.is_empty() {
+                        self.state.select(Some(0));
+                    }
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Char('G') => {
+                    if !self.prs.is_empty() {
+                        self.state.select(Some(self.prs.len() - 1));
+                    }
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
                     self.open_detail();
                     Ok(PanelSignal::Handled)
                 }
@@ -249,7 +261,7 @@ impl Panel for PrsPanel {
                 _ => Ok(PanelSignal::Ignored),
             },
             View::Detail => match key.code {
-                KeyCode::Esc => {
+                KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => {
                     self.view = View::List;
                     Ok(PanelSignal::Handled)
                 }
@@ -259,6 +271,10 @@ impl Panel for PrsPanel {
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     self.scroll = self.scroll.saturating_sub(1);
+                    Ok(PanelSignal::Handled)
+                }
+                KeyCode::Char('g') => {
+                    self.scroll = 0;
                     Ok(PanelSignal::Handled)
                 }
                 _ => Ok(PanelSignal::Ignored),
