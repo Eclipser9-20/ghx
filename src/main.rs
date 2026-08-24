@@ -115,8 +115,8 @@ enum Command {
         #[arg(long)]
         delete: Option<String>,
     },
-    /// Switch to a branch or revision
-    Checkout { refname: String },
+    /// Switch to a branch or revision (no argument opens a fuzzy branch picker)
+    Checkout { refname: Option<String> },
     /// Stage files (defaults to all changes)
     Add { paths: Vec<String> },
     /// Record staged changes
@@ -375,7 +375,17 @@ fn run() -> Result<()> {
         Command::Log { limit } => return gitcmd::log(limit),
         Command::Diff { staged } => return gitcmd::diff(staged),
         Command::Branch { create, delete } => return gitcmd::branch(create, delete),
-        Command::Checkout { refname } => return gitcmd::checkout(&refname),
+        Command::Checkout { refname } => {
+            return match refname {
+                Some(refname) => gitcmd::checkout(&refname),
+                None if tui::is_interactive() => {
+                    tui::App::new(vec![Box::new(tui::BranchesPanel::new())]).run()
+                }
+                None => anyhow::bail!(
+                    "which branch? pass a branch name — the fuzzy picker needs an interactive terminal"
+                ),
+            }
+        }
         Command::Add { paths } => return gitcmd::add(paths),
         Command::Commit { message, generate } => return gitcmd::commit(message, generate),
         Command::Fetch { remote } => return gitcmd::fetch(&remote),

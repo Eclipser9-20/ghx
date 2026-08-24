@@ -166,6 +166,22 @@ impl Client {
         Ok(())
     }
 
+    /// POST with a JSON request body, discarding the response body — for
+    /// trigger endpoints (workflow dispatch, etc.) that return 204.
+    pub fn post_json_empty(&self, path: &str, body: &Value) -> Result<()> {
+        let resp = self
+            .request(reqwest::Method::POST, path)
+            .json(body)
+            .send()
+            .with_context(|| format!("POST {path}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().unwrap_or_default();
+            bail!("POST {path} failed: {status}: {text}");
+        }
+        Ok(())
+    }
+
     pub fn put_json<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
         let resp = self
             .request(reqwest::Method::PUT, path)

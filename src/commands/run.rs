@@ -43,6 +43,19 @@ pub enum RunCommand {
         #[arg(short = 'R', long)]
         repo: Option<String>,
     },
+    /// Trigger a workflow_dispatch run
+    Trigger {
+        /// Workflow file name (ci.yml) or numeric workflow id
+        workflow: String,
+        #[arg(short = 'R', long)]
+        repo: Option<String>,
+        /// Branch or tag to run on (defaults to the repo's default branch)
+        #[arg(long = "ref")]
+        git_ref: Option<String>,
+        /// Workflow input, as key=value (repeatable)
+        #[arg(long = "input", value_name = "KEY=VALUE")]
+        inputs: Vec<String>,
+    },
 }
 
 fn resolve(repo: Option<String>) -> Result<(String, String)> {
@@ -66,7 +79,60 @@ pub fn run(client: &Client, cmd: RunCommand) -> Result<()> {
             failed_only,
         } => rerun(client, repo, run_id, failed_only),
         RunCommand::Cancel { run_id, repo } => cancel(client, repo, run_id),
+        RunCommand::Trigger {
+            workflow,
+            repo,
+            git_ref,
+            inputs,
+        } => trigger(client, repo, &workflow, git_ref, inputs),
     }
+}
+
+fn trigger(
+    client: &Client,
+    repo: Option<String>,
+    workflow: &str,
+    git_ref: Option<String>,
+    inputs: Vec<String>,
+) -> Result<()> {
+    let (owner, name) = resolve(repo)?;
+
+    let git_ref = match git_ref {
+        Some(r) => r,
+        None => {
+            let info: Value = client.get(&format!("/repos/{owner}/{name}"))?;
+            info["default_branch"]
+                .as_str()
+                .context("could not determine the repo's default branch")?
+                .to_string()
+        }
+    };
+
+    let mut input_map = serde_json::Map::new();
+    for pair in &inputs {
+        let (key, value) = pair
+            .split_once('=')
+            .with_context(|| format!("expected --input KEY=VALUE, got \"{pair}\""))?;
+        input_map.insert(key.to_string(), Value::String(value.to_string()));
+    }
+
+    let mut body = serde_json::Map::new();
+    body.insert("ref".to_string(), Value::String(git_ref.clone()));
+    if !input_map.is_empty() {
+        body.insert("inputs".to_string(), Value::Object(input_map));
+    }
+
+    client.post_json_empty(
+        &format!("/repos/{owner}/{name}/actions/workflows/{workflow}/dispatches"),
+        &Value::Object(body),
+    )?;
+    println!(
+        "{} Triggered {} on {}",
+        "✓".green().bold(),
+        workflow.bold(),
+        git_ref.cyan()
+    );
+    Ok(())
 }
 
 fn status_tag(status: &str, conclusion: Option<&str>) -> colored::ColoredString {
