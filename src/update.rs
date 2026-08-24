@@ -84,18 +84,9 @@ fn ensure_maintenance_group() {
 }
 
 pub fn run(client: &Client, channel: &str) -> Result<()> {
-    if std::env::var("GHX_UPDATE_TRACE").is_ok() {
-        eprintln!("[trace] before ensure_maintenance_group");
-    }
     ensure_maintenance_group();
-    if std::env::var("GHX_UPDATE_TRACE").is_ok() {
-        eprintln!("[trace] after ensure_maintenance_group, before find_release");
-    }
     let channel = channel.to_ascii_lowercase();
     let release = find_release(client, &channel)?;
-    if std::env::var("GHX_UPDATE_TRACE").is_ok() {
-        eprintln!("[trace] after find_release");
-    }
     let tag = release["tag_name"].as_str().unwrap_or("?");
 
     if tag == format!("v{}", env!("CARGO_PKG_VERSION")) {
@@ -115,13 +106,7 @@ pub fn run(client: &Client, channel: &str) -> Result<()> {
         .context("release asset has no API url")?;
 
     println!("Downloading {tag} ({asset_name})...");
-    if std::env::var("GHX_UPDATE_TRACE").is_ok() {
-        eprintln!("[trace] before get_bytes");
-    }
     let bytes = client.get_bytes(download_url, "application/octet-stream")?;
-    if std::env::var("GHX_UPDATE_TRACE").is_ok() {
-        eprintln!("[trace] after get_bytes, before file write");
-    }
 
     let current_exe = std::env::current_exe().context("locating the running executable")?;
     let dir = current_exe
