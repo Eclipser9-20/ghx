@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod apicmd;
 pub mod auth;
 pub mod browse;

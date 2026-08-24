@@ -14,7 +14,7 @@ mod update;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
-    apicmd, auth, browse, filter as filtercmd, git as gitcmd, grep as grepcmd, issue, label,
+    ai as aicmd, apicmd, auth, browse, filter as filtercmd, git as gitcmd, grep as grepcmd, issue, label,
     lfs as lfscmd, notifications, org, pr, repo, run as runcmd, webhook,
 };
 
@@ -227,6 +227,11 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// AI-assisted helpers over the current diff
+    Ai {
+        #[command(subcommand)]
+        cmd: aicmd::AiCommand,
+    },
     /// Search tracked files for a regex pattern
     Grep {
         /// Regular expression to search for
@@ -374,6 +379,7 @@ fn run() -> Result<()> {
             replace_text,
             yes,
         } => return filtercmd::run(path, invert_paths, replace_text, yes),
+        Command::Ai { cmd } => return aicmd::run(cmd),
         Command::Grep { pattern, path } => return grepcmd::run(&pattern, path),
         Command::Tui { panel } => return run_tui(panel),
         _ => {}

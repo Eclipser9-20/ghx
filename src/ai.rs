@@ -6,11 +6,21 @@ use serde_json::{json, Value};
 
 const SYSTEM_PROMPT: &str = "You write concise, conventional git commit messages. Given a diff, output ONLY the commit message: a short imperative summary line under 72 characters, optionally followed by a blank line and a brief body explaining why. No markdown, no quotes, no preamble, no trailing explanation.";
 
+const REVIEW_PROMPT: &str = "You explain code changes to a reviewer. Given a diff, describe in plain English what changed: a one-line overall summary, then a short bullet per meaningful change, then anything worth a second look. No markdown headings, no preamble.";
+
 const MAX_DIFF_LEN: usize = 12_000;
 
 pub fn generate_commit_message(diff: &str) -> Result<String> {
+    complete(SYSTEM_PROMPT, diff, "no staged changes to describe")
+}
+
+pub fn review_diff(diff: &str) -> Result<String> {
+    complete(REVIEW_PROMPT, diff, "no changes to review")
+}
+
+fn complete(system: &str, diff: &str, empty_msg: &str) -> Result<String> {
     if diff.trim().is_empty() {
-        bail!("no staged changes to describe");
+        bail!("{}", empty_msg);
     }
     let diff = if diff.len() > MAX_DIFF_LEN {
         &diff[..MAX_DIFF_LEN]
@@ -20,17 +30,17 @@ pub fn generate_commit_message(diff: &str) -> Result<String> {
 
     if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
         if !key.is_empty() {
-            return call_anthropic(&key, diff);
+            return call_anthropic(&key, system, diff);
         }
     }
     if let Ok(key) = std::env::var("OPENAI_API_KEY") {
         if !key.is_empty() {
-            return call_openai(&key, diff);
+            return call_openai(&key, system, diff);
         }
     }
     if let Ok(key) = std::env::var("OPENROUTER_API_KEY") {
         if !key.is_empty() {
-            return call_openrouter(&key, diff);
+            return call_openrouter(&key, system, diff);
         }
     }
     bail!(
@@ -40,7 +50,7 @@ pub fn generate_commit_message(diff: &str) -> Result<String> {
     )
 }
 
-fn call_anthropic(key: &str, diff: &str) -> Result<String> {
+fn call_anthropic(key: &str, system: &str, diff: &str) -> Result<String> {
     let model =
         std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-3-5-haiku-latest".into());
     let http = reqwest::blocking::Client::new();
@@ -51,7 +61,7 @@ fn call_anthropic(key: &str, diff: &str) -> Result<String> {
         .json(&json!({
             "model": model,
             "max_tokens": 300,
-            "system": SYSTEM_PROMPT,
+            "system": system,
             "messages": [{"role": "user", "content": format!("Diff:\n{diff}")}]
         }))
         .send()
@@ -65,7 +75,7 @@ fn call_anthropic(key: &str, diff: &str) -> Result<String> {
         .with_context(|| format!("unexpected response from Anthropic: {resp}"))
 }
 
-fn call_openai(key: &str, diff: &str) -> Result<String> {
+fn call_openai(key: &str, system: &str, diff: &str) -> Result<String> {
     let base =
         std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".into());
     let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
@@ -76,7 +86,7 @@ fn call_openai(key: &str, diff: &str) -> Result<String> {
         .json(&json!({
             "model": model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": format!("Diff:\n{diff}")}
             ]
         }))
@@ -93,7 +103,7 @@ fn call_openai(key: &str, diff: &str) -> Result<String> {
 
 /// OpenRouter is OpenAI-compatible and hosts several genuinely free
 /// models — no local install, just a free API key.
-fn call_openrouter(key: &str, diff: &str) -> Result<String> {
+fn call_openrouter(key: &str, system: &str, diff: &str) -> Result<String> {
     let model =
         std::env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "meta-llama/llama-3.1-8b-instruct:free".into());
     let http = reqwest::blocking::Client::new();
@@ -103,7 +113,7 @@ fn call_openrouter(key: &str, diff: &str) -> Result<String> {
         .json(&json!({
             "model": model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": format!("Diff:\n{diff}")}
             ]
         }))
