@@ -1,4 +1,5 @@
 use crate::git;
+use crate::highlight::Highlighter;
 use anyhow::{Context, Result};
 use colored::Colorize;
 
@@ -142,19 +143,7 @@ pub fn log(limit: usize) -> Result<()> {
 
 pub fn diff(staged: bool) -> Result<()> {
     let text = git::diff(staged)?;
-    if text.is_empty() {
-        println!("{}", "no changes".dimmed());
-        return Ok(());
-    }
-    for line in text.lines() {
-        if line.starts_with('+') && !line.starts_with("+++") {
-            println!("{}", line.green());
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            println!("{}", line.red());
-        } else {
-            println!("{line}");
-        }
-    }
+    Highlighter::new().print_diff(&text);
     Ok(())
 }
 
@@ -264,14 +253,15 @@ pub fn cherry_pick(commit_ref: &str) -> Result<()> {
 }
 
 pub fn blame(path: &str) -> Result<()> {
+    let hl = Highlighter::new();
     for line in git::blame(path)? {
-        println!(
-            "{} {:<16} {:>4}  {}",
+        print!(
+            "{} {:<16} {:>4}  ",
             line.commit.yellow(),
             line.author.cyan(),
-            line.line_no,
-            line.content
+            line.line_no
         );
+        hl.print_line(path, &line.content);
     }
     Ok(())
 }

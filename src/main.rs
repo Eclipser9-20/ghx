@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod filter;
 mod git;
+mod highlight;
 mod lfs;
 mod tui;
 mod uninstall;
