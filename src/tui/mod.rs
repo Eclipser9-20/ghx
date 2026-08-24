@@ -19,12 +19,18 @@
 
 mod branches;
 mod diff_panel;
+mod log_panel;
 mod markdown;
 mod prs;
+mod stash_panel;
+mod status_panel;
 
 pub use branches::BranchesPanel;
 pub use diff_panel::DiffPanel;
+pub use log_panel::LogPanel;
 pub use prs::PrsPanel;
+pub use stash_panel::StashPanel;
+pub use status_panel::StatusPanel;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
@@ -154,7 +160,12 @@ impl App {
             use ratatui::text::Line;
             use ratatui::widgets::Paragraph;
             let (r, g, b) = palette::COMMENT;
-            let hint = format!(" {}  |  Tab: switch panel  q: quit ", panel.key_hints());
+            let switch_hint = if self.panels.len() > 1 {
+                "Tab/Shift+Tab: switch panel  Alt+1-9: jump to panel  "
+            } else {
+                ""
+            };
+            let hint = format!(" {}  |  {switch_hint}q: quit ", panel.key_hints());
             frame.render_widget(
                 Paragraph::new(Line::from(hint)).style(Style::default().fg(Color::Rgb(r, g, b))),
                 footer,
@@ -197,6 +208,22 @@ impl App {
             if key.code == KeyCode::Tab && self.panels.len() > 1 {
                 self.focused = (self.focused + 1) % self.panels.len();
                 continue;
+            }
+            if key.code == KeyCode::BackTab && self.panels.len() > 1 {
+                self.focused = (self.focused + self.panels.len() - 1) % self.panels.len();
+                continue;
+            }
+            // Alt+<digit> jumps straight to a panel by position, without
+            // colliding with plain digit characters typed into a panel's
+            // own text input (commit message, stash message, filter box).
+            if key.modifiers.contains(event::KeyModifiers::ALT) {
+                if let KeyCode::Char(c @ '1'..='9') = key.code {
+                    let idx = c as usize - '1' as usize;
+                    if idx < self.panels.len() {
+                        self.focused = idx;
+                        continue;
+                    }
+                }
             }
 
             if let Some(panel) = self.panels.get_mut(self.focused) {

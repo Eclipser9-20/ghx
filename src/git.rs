@@ -217,15 +217,7 @@ pub fn log(limit: usize) -> Result<Vec<LogEntry>> {
     Ok(out)
 }
 
-pub fn diff(staged: bool) -> Result<String> {
-    let repo = open_current()?;
-    let diff = if staged {
-        let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-        repo.diff_tree_to_index(head_tree.as_ref(), None, None)?
-    } else {
-        repo.diff_index_to_workdir(None, None)?
-    };
-
+fn diff_to_patch_string(diff: &git2::Diff) -> Result<String> {
     let mut buf = Vec::new();
     diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
         let origin = line.origin();
@@ -236,6 +228,125 @@ pub fn diff(staged: bool) -> Result<String> {
         true
     })?;
     Ok(String::from_utf8_lossy(&buf).to_string())
+}
+
+pub fn diff(staged: bool) -> Result<String> {
+    let repo = open_current()?;
+    let diff = if staged {
+        let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+        repo.diff_tree_to_index(head_tree.as_ref(), None, None)?
+    } else {
+        repo.diff_index_to_workdir(None, None)?
+    };
+    diff_to_patch_string(&diff)
+}
+
+/// Diff limited to a single path, staged or unstaged.
+pub fn diff_path(path: &str, staged: bool) -> Result<String> {
+    let repo = open_current()?;
+    let mut opts = git2::DiffOptions::new();
+    opts.pathspec(path);
+    let diff = if staged {
+        let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+        repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut opts))?
+    } else {
+        repo.diff_index_to_workdir(None, Some(&mut opts))?
+    };
+    diff_to_patch_string(&diff)
+}
+
+/// Diff of a single commit against its first parent (empty tree if it has
+/// no parent, i.e. the repository's first commit).
+pub fn diff_commit(id: &str) -> Result<String> {
+    let repo = open_current()?;
+    let obj = repo
+        .revparse_single(id)
+        .with_context(|| format!("no such commit: {id}"))?;
+    let commit = obj.peel_to_commit()?;
+    let tree = commit.tree()?;
+    let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+    diff_to_patch_string(&diff)
+}
+
+/// Per-file status split into staged (index vs HEAD) and unstaged (workdir
+/// vs index) so a status panel can offer independent stage/unstage actions.
+pub struct FileStatus {
+    pub path: String,
+    pub staged: bool,
+    pub code: String,
+}
+
+pub fn status_detailed() -> Result<Vec<FileStatus>> {
+    let repo = open_current()?;
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true);
+    let statuses = repo.statuses(Some(&mut opts))?;
+
+    let mut out = Vec::new();
+    for entry in statuses.iter() {
+        let path = entry.path().unwrap_or("?").to_string();
+        let s = entry.status();
+
+        if s.is_index_new() || s.is_index_modified() || s.is_index_deleted() || s.is_index_renamed()
+        {
+            let code = if s.is_index_new() {
+                "new"
+            } else if s.is_index_deleted() {
+                "deleted"
+            } else if s.is_index_renamed() {
+                "renamed"
+            } else {
+                "modified"
+            };
+            out.push(FileStatus {
+                path: path.clone(),
+                staged: true,
+                code: code.to_string(),
+            });
+        }
+
+        if s.is_wt_new() || s.is_wt_modified() || s.is_wt_deleted() || s.is_wt_renamed() {
+            let code = if s.is_wt_new() {
+                "new"
+            } else if s.is_wt_deleted() {
+                "deleted"
+            } else if s.is_wt_renamed() {
+                "renamed"
+            } else {
+                "modified"
+            };
+            out.push(FileStatus {
+                path,
+                staged: false,
+                code: code.to_string(),
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Unstage paths (or everything, when `paths` is empty), leaving working
+/// tree contents untouched.
+pub fn unstage(paths: &[String]) -> Result<()> {
+    let repo = open_current()?;
+    let head = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel(git2::ObjectType::Commit).ok());
+    if paths.is_empty() {
+        let all: Vec<String> = status_detailed()?
+            .into_iter()
+            .filter(|f| f.staged)
+            .map(|f| f.path)
+            .collect();
+        if !all.is_empty() {
+            repo.reset_default(head.as_ref(), all.iter())?;
+        }
+    } else {
+        repo.reset_default(head.as_ref(), paths.iter())?;
+    }
+    Ok(())
 }
 
 /// Files whose whole-file replacement is handled elsewhere (LFS pointer

@@ -191,6 +191,15 @@ enum TuiPanel {
     },
     /// Branch switcher panel only
     Branches,
+    /// Status/stage/commit panel only
+    Status,
+    /// Commit history panel only
+    Log {
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+    /// Stash panel only
+    Stash,
 }
 
 fn main() {
@@ -303,8 +312,20 @@ fn run_tui(panel: Option<TuiPanel>) -> Result<()> {
         Some(TuiPanel::Branches) => {
             vec![Box::new(tui::BranchesPanel::new())]
         }
+        Some(TuiPanel::Status) => {
+            vec![Box::new(tui::StatusPanel::new())]
+        }
+        Some(TuiPanel::Log { limit }) => {
+            vec![Box::new(tui::LogPanel::new(limit))]
+        }
+        Some(TuiPanel::Stash) => {
+            vec![Box::new(tui::StashPanel::new())]
+        }
         None => {
             let mut panels: Vec<Box<dyn tui::Panel>> = Vec::new();
+
+            panels.push(Box::new(tui::StatusPanel::new()));
+            panels.push(Box::new(tui::LogPanel::new(100)));
 
             if let (Ok(Some(token)), Ok(repo)) =
                 (config::Config::resolve_token(), git::GhRepo::detect())
@@ -317,6 +338,7 @@ fn run_tui(panel: Option<TuiPanel>) -> Result<()> {
             let diff_text = git::diff(false).unwrap_or_default();
             panels.push(Box::new(tui::DiffPanel::new(&diff_text)));
             panels.push(Box::new(tui::BranchesPanel::new()));
+            panels.push(Box::new(tui::StashPanel::new()));
             panels
         }
     };
