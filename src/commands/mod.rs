@@ -1,5 +1,6 @@
 pub mod apicmd;
 pub mod auth;
+pub mod browse;
 pub mod filter;
 pub mod git;
 pub mod issue;

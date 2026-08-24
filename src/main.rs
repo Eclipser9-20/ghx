@@ -12,8 +12,8 @@ mod update;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
-    apicmd, auth, filter as filtercmd, git as gitcmd, issue, label, lfs as lfscmd, notifications,
-    org, pr, repo, run as runcmd, webhook,
+    apicmd, auth, browse, filter as filtercmd, git as gitcmd, issue, label, lfs as lfscmd,
+    notifications, org, pr, repo, run as runcmd, webhook,
 };
 
 #[derive(Parser)]
@@ -226,6 +226,29 @@ enum Command {
         #[command(subcommand)]
         cmd: label::LabelCommand,
     },
+    /// Browse a repo's file tree remotely, like `ls -la` (owner/repo[/path])
+    Ls {
+        spec: String,
+        /// Show entries starting with '.'
+        #[arg(short = 'a', long)]
+        all: bool,
+    },
+    /// Download a single file from a repo to local disk (owner/repo/path/to/file)
+    Cp {
+        spec: String,
+        /// Local path to write the file to
+        local_path: String,
+    },
+    /// Delete a file from a repo, creating a real commit (owner/repo/path/to/file)
+    Rm {
+        spec: String,
+        /// Commit message for the deletion
+        #[arg(short = 'm', long)]
+        message: String,
+        /// Actually delete the file (without this, only a dry-run summary is printed)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Make a raw authenticated request against the GitHub API
     Api {
         /// HTTP method (GET, POST, PATCH, PUT, DELETE)
@@ -354,6 +377,9 @@ fn run() -> Result<()> {
         Command::Notifications { cmd } => notifications::run(&client, cmd),
         Command::Label { cmd } => label::run(&client, cmd),
         Command::Api { method, path, body } => apicmd::run(&client, method, path, body),
+        Command::Ls { spec, all } => browse::ls(&client, &spec, all),
+        Command::Cp { spec, local_path } => browse::cp(&client, &spec, &local_path),
+        Command::Rm { spec, message, yes } => browse::rm(&client, &spec, &message, yes),
         _ => unreachable!(),
     }
 }

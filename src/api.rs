@@ -189,6 +189,18 @@ impl Client {
         Ok(())
     }
 
+    /// DELETE with a JSON request body, returning the parsed response body.
+    /// Used by the Contents API's file-delete endpoint, which requires the
+    /// blob sha and commit message in the request body.
+    pub fn delete_json<T: DeserializeOwned>(&self, path: &str, body: &Value) -> Result<T> {
+        let resp = self
+            .request(reqwest::Method::DELETE, path)
+            .json(body)
+            .send()
+            .with_context(|| format!("DELETE {path}"))?;
+        Self::handle(resp)
+    }
+
     pub fn delete(&self, path: &str) -> Result<()> {
         let resp = self
             .request(reqwest::Method::DELETE, path)
