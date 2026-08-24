@@ -1,6 +1,9 @@
+pub mod apicmd;
 pub mod auth;
+pub mod filter;
 pub mod git;
 pub mod issue;
+pub mod label;
 pub mod lfs;
 pub mod notifications;
 pub mod org;

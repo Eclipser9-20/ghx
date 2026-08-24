@@ -220,9 +220,18 @@ pub fn pull(remote: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn push(remote: &str, branch: Option<&str>) -> Result<()> {
-    git::push(remote, branch)?;
-    println!("{} Pushed to {}", "✓".green().bold(), remote);
+pub fn push(
+    remote: &str,
+    branch: Option<&str>,
+    force: bool,
+    force_with_lease: bool,
+) -> Result<()> {
+    git::push_opts(remote, branch, force, force_with_lease)?;
+    if force || force_with_lease {
+        println!("{} Force-pushed to {}", "✓".green().bold(), remote);
+    } else {
+        println!("{} Pushed to {}", "✓".green().bold(), remote);
+    }
     Ok(())
 }
 
@@ -240,4 +249,75 @@ pub fn merge(branch: &str) -> Result<()> {
     let result = git::merge(branch)?;
     println!("{} {}", "✓".green().bold(), result);
     Ok(())
+}
+
+pub fn rebase(onto: &str) -> Result<()> {
+    let result = git::rebase(onto)?;
+    println!("{} {}", "✓".green().bold(), result);
+    Ok(())
+}
+
+pub fn cherry_pick(commit_ref: &str) -> Result<()> {
+    let id = git::cherry_pick(commit_ref)?;
+    println!("{} Cherry-picked as {}", "✓".green().bold(), id.yellow());
+    Ok(())
+}
+
+pub fn blame(path: &str) -> Result<()> {
+    for line in git::blame(path)? {
+        println!(
+            "{} {:<16} {:>4}  {}",
+            line.commit.yellow(),
+            line.author.cyan(),
+            line.line_no,
+            line.content
+        );
+    }
+    Ok(())
+}
+
+#[derive(clap::Subcommand)]
+pub enum WorktreeCommand {
+    /// List worktrees
+    List,
+    /// Add a new worktree
+    Add {
+        /// Name of the worktree
+        name: String,
+        /// Path to create the worktree at
+        path: String,
+        /// Create a new branch for the worktree (defaults to `name`)
+        #[arg(long)]
+        branch: Option<String>,
+    },
+    /// Remove a worktree
+    Remove { name: String },
+}
+
+pub fn worktree(cmd: WorktreeCommand) -> Result<()> {
+    match cmd {
+        WorktreeCommand::List => {
+            for wt in git::worktree_list()? {
+                println!("{:<20} {}", wt.name.cyan(), wt.path);
+            }
+            Ok(())
+        }
+        WorktreeCommand::Add { name, path, branch } => {
+            let branch = branch.unwrap_or_else(|| name.clone());
+            git::worktree_add(&name, &path, Some(&branch))?;
+            println!(
+                "{} Added worktree {} at {} (branch {})",
+                "✓".green().bold(),
+                name.cyan(),
+                path,
+                branch.cyan()
+            );
+            Ok(())
+        }
+        WorktreeCommand::Remove { name } => {
+            git::worktree_remove(&name)?;
+            println!("{} Removed worktree {}", "✓".green().bold(), name.cyan());
+            Ok(())
+        }
+    }
 }
