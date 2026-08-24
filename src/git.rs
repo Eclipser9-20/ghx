@@ -769,7 +769,8 @@ pub fn reset(mode: &str, target: &str) -> Result<()> {
 pub fn merge(branch: &str) -> Result<String> {
     let repo = open_current()?;
     let their_branch = repo
-        .find_branch(branch, BranchType::Local)
+        .find_branch(branch, BranchType::Remote)
+        .or_else(|_| repo.find_branch(branch, BranchType::Local))
         .or_else(|_| repo.find_branch(&format!("origin/{branch}"), BranchType::Remote))
         .with_context(|| format!("no such branch: {branch}"))?;
     let their_commit = their_branch.get().peel_to_commit()?;
