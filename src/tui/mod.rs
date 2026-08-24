@@ -25,6 +25,7 @@ mod markdown;
 mod prs;
 mod stash_panel;
 mod status_panel;
+mod working;
 
 pub use branches::BranchesPanel;
 pub use diff_panel::DiffPanel;
@@ -33,6 +34,7 @@ pub use log_panel::LogPanel;
 pub use prs::PrsPanel;
 pub use stash_panel::StashPanel;
 pub use status_panel::StatusPanel;
+pub use working::WorkingPanel;
 
 use anyhow::Result;
 use crossterm::event::{

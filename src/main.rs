@@ -331,6 +331,8 @@ enum TuiPanel {
     Stash,
     /// GitHub activity feed panel only, with infinite scroll
     Feed,
+    /// Open PRs and issues with your name on them
+    Working,
 }
 
 fn main() {
@@ -560,6 +562,11 @@ fn run_tui(panel: Option<TuiPanel>) -> Result<()> {
             let client = api::Client::new(token)?;
             vec![Box::new(tui::FeedPanel::new(client))]
         }
+        Some(TuiPanel::Working) => {
+            let token = config::Config::resolve_token()?;
+            let client = api::Client::new(token)?;
+            vec![Box::new(tui::WorkingPanel::new(client))]
+        }
         None => {
             let mut panels: Vec<Box<dyn tui::Panel>> = Vec::new();
 
@@ -579,8 +586,11 @@ fn run_tui(panel: Option<TuiPanel>) -> Result<()> {
             panels.push(Box::new(tui::StashPanel::new()));
 
             if let Ok(Some(gh_token)) = token {
-                if let Ok(client) = api::Client::new(Some(gh_token)) {
+                if let Ok(client) = api::Client::new(Some(gh_token.clone())) {
                     panels.push(Box::new(tui::FeedPanel::new(client)));
+                }
+                if let Ok(client) = api::Client::new(Some(gh_token)) {
+                    panels.push(Box::new(tui::WorkingPanel::new(client)));
                 }
             }
             panels
