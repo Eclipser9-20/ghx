@@ -2,6 +2,7 @@ mod ai;
 mod api;
 mod commands;
 mod config;
+mod filter;
 mod git;
 mod lfs;
 mod tui;
@@ -11,8 +12,8 @@ mod update;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use commands::{
-    auth, git as gitcmd, issue, lfs as lfscmd, notifications, org, pr, repo, run as runcmd,
-    webhook,
+    apicmd, auth, filter as filtercmd, git as gitcmd, issue, label, lfs as lfscmd, notifications,
+    org, pr, repo, run as runcmd, webhook,
 };
 
 #[derive(Parser)]
@@ -134,6 +135,12 @@ enum Command {
         #[arg(default_value = "origin")]
         remote: String,
         branch: Option<String>,
+        /// Overwrite the remote branch unconditionally
+        #[arg(short = 'f', long)]
+        force: bool,
+        /// Overwrite the remote branch, but abort if it moved since our last fetch
+        #[arg(long)]
+        force_with_lease: bool,
     },
     /// Clone a repository by URL
     Clone { url: String, dir: Option<String> },
@@ -177,6 +184,58 @@ enum Command {
     Lfs {
         #[command(subcommand)]
         cmd: lfscmd::LfsCommand,
+    },
+    /// Replay commits from the current branch onto another branch
+    Rebase {
+        /// Branch or revision to rebase onto
+        onto: String,
+    },
+    /// Apply a single commit from elsewhere onto the current branch
+    CherryPick {
+        /// Commit to cherry-pick
+        commit: String,
+    },
+    /// Show who last changed each line of a file
+    Blame {
+        /// Path to the file, relative to the repo root
+        path: String,
+    },
+    /// List, add, or remove worktrees
+    Worktree {
+        #[command(subcommand)]
+        cmd: gitcmd::WorktreeCommand,
+    },
+    /// Rewrite history to keep or remove a path, or scrub text from blobs
+    /// (a native, simplified replacement for git-filter-repo)
+    Filter {
+        /// Keep (or, with --invert-paths, remove) only history touching this path
+        #[arg(long)]
+        path: Option<String>,
+        /// Invert --path: remove the given path from all history instead of keeping only it
+        #[arg(long)]
+        invert_paths: bool,
+        /// Scrub text from blob contents across history, given as PATTERN=REPLACEMENT (repeatable)
+        #[arg(long = "replace-text", value_name = "PATTERN=REPLACEMENT")]
+        replace_text: Vec<String>,
+        /// Actually rewrite history (without this, only a dry-run summary is printed)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Work with repository labels
+    Label {
+        #[command(subcommand)]
+        cmd: label::LabelCommand,
+    },
+    /// Make a raw authenticated request against the GitHub API
+    Api {
+        /// HTTP method (GET, POST, PATCH, PUT, DELETE)
+        #[arg(long, default_value = "GET")]
+        method: String,
+        /// API path, e.g. /repos/owner/repo
+        path: String,
+        /// JSON request body
+        #[arg(long)]
+        body: Option<String>,
     },
 }
 
@@ -249,7 +308,12 @@ fn run() -> Result<()> {
         Command::Commit { message, generate } => return gitcmd::commit(message, generate),
         Command::Fetch { remote } => return gitcmd::fetch(&remote),
         Command::Pull { remote } => return gitcmd::pull(&remote),
-        Command::Push { remote, branch } => return gitcmd::push(&remote, branch.as_deref()),
+        Command::Push {
+            remote,
+            branch,
+            force,
+            force_with_lease,
+        } => return gitcmd::push(&remote, branch.as_deref(), force, force_with_lease),
         Command::Clone { url, dir } => return gitcmd::clone(&url, dir.as_deref()),
         Command::Stash { cmd } => return gitcmd::stash(cmd),
         Command::Tag {
@@ -262,6 +326,16 @@ fn run() -> Result<()> {
         Command::Reset { mode, target } => return gitcmd::reset(&mode, &target),
         Command::Merge { branch } => return gitcmd::merge(&branch),
         Command::Lfs { cmd } => return lfscmd::run(cmd),
+        Command::Rebase { onto } => return gitcmd::rebase(&onto),
+        Command::CherryPick { commit } => return gitcmd::cherry_pick(&commit),
+        Command::Blame { path } => return gitcmd::blame(&path),
+        Command::Worktree { cmd } => return gitcmd::worktree(cmd),
+        Command::Filter {
+            path,
+            invert_paths,
+            replace_text,
+            yes,
+        } => return filtercmd::run(path, invert_paths, replace_text, yes),
         Command::Tui { panel } => return run_tui(panel),
         _ => {}
     }
@@ -278,6 +352,8 @@ fn run() -> Result<()> {
         Command::Org { cmd } => org::run(&client, cmd),
         Command::Webhook { cmd } => webhook::run(&client, cmd),
         Command::Notifications { cmd } => notifications::run(&client, cmd),
+        Command::Label { cmd } => label::run(&client, cmd),
+        Command::Api { method, path, body } => apicmd::run(&client, method, path, body),
         _ => unreachable!(),
     }
 }

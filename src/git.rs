@@ -547,16 +547,78 @@ pub fn pull(remote_name: &str) -> Result<()> {
     }
 }
 
-pub fn push(remote_name: &str, branch: Option<&str>) -> Result<()> {
+/// Look up the OID a remote currently has for `refs/heads/<branch>`, if any.
+/// Used by `--force-with-lease` to detect whether the remote moved since we
+/// last saw it (via our own remote-tracking ref).
+fn remote_branch_oid(repo: &Repository, remote_name: &str, branch: &str) -> Result<Option<git2::Oid>> {
+    let mut remote = repo
+        .find_remote(remote_name)
+        .with_context(|| format!("no remote named '{remote_name}'"))?;
+    remote
+        .connect_auth(git2::Direction::Fetch, Some(remote_callbacks()), None)
+        .with_context(|| format!("connecting to {remote_name}"))?;
+    let want = format!("refs/heads/{branch}");
+    let oid = remote
+        .list()?
+        .iter()
+        .find(|h| h.name() == want)
+        .map(|h| h.oid());
+    remote.disconnect().ok();
+    Ok(oid)
+}
+
+/// Push with optional `--force` (`+` refspec, unconditional overwrite) and
+/// `--force-with-lease` (aborts if the remote's current tip doesn't match
+/// what our local remote-tracking ref last recorded — a cheap approximation
+/// of git's lease check using libgit2's remote ref listing instead of a
+/// separately tracked "expected" OID).
+pub fn push_opts(
+    remote_name: &str,
+    branch: Option<&str>,
+    force: bool,
+    force_with_lease: bool,
+) -> Result<()> {
     let repo = open_current()?;
     let branch = match branch {
         Some(b) => b.to_string(),
         None => current_branch()?,
     };
+
+    if force_with_lease {
+        let remote_oid = remote_branch_oid(&repo, remote_name, &branch)?;
+        let tracking_ref = format!("refs/remotes/{remote_name}/{branch}");
+        let known_oid = repo
+            .find_reference(&tracking_ref)
+            .ok()
+            .and_then(|r| r.target());
+        match (remote_oid, known_oid) {
+            (Some(remote_oid), Some(known_oid)) if remote_oid != known_oid => {
+                bail!(
+                    "refusing to force-push: {remote_name}/{branch} on the remote ({}) has \
+                     moved since we last fetched it ({}) — run `ghx fetch {remote_name}` and \
+                     re-check before overwriting",
+                    &remote_oid.to_string()[..7],
+                    &known_oid.to_string()[..7]
+                );
+            }
+            (Some(_), None) => {
+                bail!(
+                    "refusing to force-push: {remote_name}/{branch} exists on the remote but we \
+                     have no local record of it — run `ghx fetch {remote_name}` first"
+                );
+            }
+            _ => {}
+        }
+    }
+
     let mut remote = repo
         .find_remote(remote_name)
         .with_context(|| format!("no remote named '{remote_name}'"))?;
-    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
+    let refspec = if force || force_with_lease {
+        format!("+refs/heads/{branch}:refs/heads/{branch}")
+    } else {
+        format!("refs/heads/{branch}:refs/heads/{branch}")
+    };
     let mut po = PushOptions::new();
     po.remote_callbacks(remote_callbacks());
     remote
@@ -753,4 +815,189 @@ pub fn merge(branch: &str) -> Result<String> {
     )?;
     repo.cleanup_state()?;
     Ok(format!("merged as {}", &oid.to_string()[..7]))
+}
+
+// ---------------------------------------------------------------------
+// rebase
+// ---------------------------------------------------------------------
+
+/// Linear rebase of the current branch onto `onto`. Not interactive — every
+/// commit is replayed in order; a conflict aborts the whole operation
+/// (rather than leaving a half-finished rebase to resume), which keeps the
+/// failure mode simple and predictable.
+pub fn rebase(onto: &str) -> Result<String> {
+    let repo = open_current()?;
+    let branch_name = current_branch()?;
+    let sig = repo
+        .signature()
+        .context("could not determine author identity — set user.name/user.email")?;
+
+    let onto_obj = repo
+        .revparse_single(onto)
+        .with_context(|| format!("no such branch or revision: {onto}"))?;
+    let onto_commit = onto_obj.peel_to_commit()?;
+    let onto_annotated = repo.find_annotated_commit(onto_commit.id())?;
+
+    let branch_ref = repo.find_reference(&format!("refs/heads/{branch_name}"))?;
+    let branch_annotated = repo.reference_to_annotated_commit(&branch_ref)?;
+
+    let mut rebase = repo.rebase(Some(&branch_annotated), None, Some(&onto_annotated), None)?;
+
+    let mut count = 0;
+    while let Some(op) = rebase.next() {
+        let op = op?;
+        let commit = repo.find_commit(op.id())?;
+        match rebase.commit(None, &sig, None) {
+            Ok(_) => count += 1,
+            Err(e) if e.code() == git2::ErrorCode::Applied => {}
+            Err(e) => {
+                rebase.abort().ok();
+                bail!(
+                    "rebase stopped at commit {} ({}): {e} — conflict resolution isn't \
+                     supported, rebase aborted",
+                    &commit.id().to_string()[..7],
+                    commit.summary().unwrap_or("")
+                );
+            }
+        }
+    }
+    rebase.finish(Some(&sig))?;
+    Ok(format!("rebased {count} commit(s) of {branch_name} onto {onto}"))
+}
+
+// ---------------------------------------------------------------------
+// cherry-pick
+// ---------------------------------------------------------------------
+
+pub fn cherry_pick(commit_ref: &str) -> Result<String> {
+    let repo = open_current()?;
+    let obj = repo
+        .revparse_single(commit_ref)
+        .with_context(|| format!("no such commit: {commit_ref}"))?;
+    let source = obj.peel_to_commit()?;
+
+    repo.cherrypick(&source, None)?;
+
+    let mut index = repo.index()?;
+    if index.has_conflicts() {
+        bail!("cherry-pick has conflicts — resolve them, then `ghx add` the fixed files and `ghx commit`");
+    }
+
+    let tree_id = index.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+    let sig = repo
+        .signature()
+        .context("could not determine author identity — set user.name/user.email")?;
+    let head_commit = repo.head()?.peel_to_commit()?;
+    let message = source.message().unwrap_or("").to_string();
+    let oid = repo.commit(
+        Some("HEAD"),
+        &source.author(),
+        &sig,
+        &message,
+        &tree,
+        &[&head_commit],
+    )?;
+    repo.cleanup_state()?;
+    Ok(oid.to_string()[..7].to_string())
+}
+
+// ---------------------------------------------------------------------
+// blame
+// ---------------------------------------------------------------------
+
+pub struct BlameLine {
+    pub commit: String,
+    pub author: String,
+    pub line_no: usize,
+    pub content: String,
+}
+
+pub fn blame(path: &str) -> Result<Vec<BlameLine>> {
+    let repo = open_current()?;
+    let blame = repo.blame_file(Path::new(path), None)?;
+
+    let contents = {
+        let head = repo.head()?.peel_to_tree()?;
+        let entry = head
+            .get_path(Path::new(path))
+            .with_context(|| format!("{path} not found in HEAD"))?;
+        let blob = repo.find_blob(entry.id())?;
+        String::from_utf8_lossy(blob.content()).to_string()
+    };
+
+    let mut out = Vec::new();
+    for (i, line) in contents.lines().enumerate() {
+        let line_no = i + 1;
+        if let Some(hunk) = blame.get_line(line_no) {
+            let sig = hunk.final_signature();
+            out.push(BlameLine {
+                commit: hunk.final_commit_id().to_string()[..7].to_string(),
+                author: sig.name().unwrap_or("?").to_string(),
+                line_no,
+                content: line.to_string(),
+            });
+        } else {
+            out.push(BlameLine {
+                commit: "-------".to_string(),
+                author: "?".to_string(),
+                line_no,
+                content: line.to_string(),
+            });
+        }
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------
+// worktrees
+// ---------------------------------------------------------------------
+
+pub struct WorktreeEntry {
+    pub name: String,
+    pub path: String,
+}
+
+pub fn worktree_list() -> Result<Vec<WorktreeEntry>> {
+    let repo = open_current()?;
+    let mut out = Vec::new();
+    for name in repo.worktrees()?.iter().flatten() {
+        if let Ok(wt) = repo.find_worktree(name) {
+            out.push(WorktreeEntry {
+                name: name.to_string(),
+                path: wt.path().display().to_string(),
+            });
+        }
+    }
+    Ok(out)
+}
+
+pub fn worktree_add(name: &str, path: &str, branch: Option<&str>) -> Result<()> {
+    let repo = open_current()?;
+    let mut opts = git2::WorktreeAddOptions::new();
+
+    let branch_ref;
+    if let Some(branch) = branch {
+        let commit = repo.head()?.peel_to_commit()?;
+        let b = repo.branch(branch, &commit, false)?;
+        branch_ref = b.into_reference();
+        opts.reference(Some(&branch_ref));
+    }
+
+    repo.worktree(name, Path::new(path), Some(&opts))
+        .with_context(|| format!("adding worktree '{name}' at {path}"))?;
+    Ok(())
+}
+
+pub fn worktree_remove(name: &str) -> Result<()> {
+    let repo = open_current()?;
+    let wt = repo
+        .find_worktree(name)
+        .with_context(|| format!("no worktree named '{name}'"))?;
+    wt.prune(Some(
+        git2::WorktreePruneOptions::new()
+            .working_tree(true)
+            .valid(true),
+    ))
+    .with_context(|| format!("removing worktree '{name}'"))
 }
