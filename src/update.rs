@@ -134,11 +134,12 @@ pub fn run(client: &Client, channel: &str, yes: bool) -> Result<()> {
     if let Some(installed) = &installed_tag {
         let installed_rank = channel_rank(installed);
         let target_rank = channel_rank(&tag);
+        // Switching to a less-tested channel is a heads-up, not a wall: print
+        // a brief warning and carry on. `--yes` silences even that.
         if target_rank < installed_rank && !yes {
-            bail!(
-                "{} is currently installed ({installed}); {} is less tested (dev: untested and can break \
-                 at any time; beta: testing phase; stable: fully tested, built for speed). \
-                 Re-run with --yes to switch anyway.",
+            eprintln!(
+                "warning: switching from {} ({installed}) to {} ({tag}) — less tested \
+                 (dev: can break anytime; beta: testing phase; stable: fully tested).",
                 channel_name(installed_rank),
                 channel_name(target_rank),
             );
