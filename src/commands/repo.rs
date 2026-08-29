@@ -1,8 +1,9 @@
 use crate::api::Client;
 use crate::git::{self, GhRepo};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 
 #[derive(clap::Subcommand)]
 pub enum RepoCommand {
@@ -23,7 +24,7 @@ pub enum RepoCommand {
         #[arg(long, default_value_t = 30)]
         limit: u32,
     },
-    /// Create a new repository
+    /// Create a new repository on GitHub and initialize it locally
     Create {
         /// Repository name, or owner/name to create under an org
         name: String,
@@ -31,6 +32,18 @@ pub enum RepoCommand {
         description: Option<String>,
         #[arg(long)]
         private: bool,
+        /// Initialize the current directory as the repo instead of creating a
+        /// new subdirectory (publishes files already here)
+        #[arg(long)]
+        here: bool,
+        /// Create and commit locally but don't push to GitHub yet
+        #[arg(long)]
+        no_push: bool,
+    },
+    /// Initialize a new local git repository (no GitHub repo created)
+    Init {
+        /// Directory to initialize (defaults to the current directory)
+        dir: Option<String>,
     },
     /// Delete a repository (requires typing the full owner/repo to confirm)
     Delete {
@@ -117,7 +130,10 @@ pub fn run(client: &Client, cmd: RepoCommand) -> Result<()> {
             name,
             description,
             private,
-        } => create(client, &name, description, private),
+            here,
+            no_push,
+        } => create(client, &name, description, private, here, no_push),
+        RepoCommand::Init { dir } => init(dir.as_deref()),
         RepoCommand::Delete { repo } => delete(client, &repo),
         RepoCommand::Visibility {
             repo,
@@ -186,7 +202,14 @@ fn clone(repo: &str, dir: Option<String>) -> Result<()> {
     git::clone(&url, dir.as_ref().map(std::path::Path::new))
 }
 
-fn create(client: &Client, name: &str, description: Option<String>, private: bool) -> Result<()> {
+fn create(
+    client: &Client,
+    name: &str,
+    description: Option<String>,
+    private: bool,
+    here: bool,
+    no_push: bool,
+) -> Result<()> {
     let body = json!({
         "name": name,
         "description": description.unwrap_or_default(),
@@ -207,9 +230,63 @@ fn create(client: &Client, name: &str, description: Option<String>, private: boo
     };
 
     let full_name = data["full_name"].as_str().unwrap_or(name);
-    let url = data["html_url"].as_str().unwrap_or("");
+    let html_url = data["html_url"].as_str().unwrap_or("");
+    // The exact remote URL and the server-side repo name, straight from the
+    // create response, so the local remote matches regardless of casing or
+    // org routing.
+    let clone_url = data["clone_url"]
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("https://github.com/{full_name}.git"));
+    let repo_name = data["name"].as_str().unwrap_or(name);
+
     println!("{} Created {}", "✓".green().bold(), full_name.bold());
-    println!("{}", url.underline());
+    println!("{}", html_url.underline());
+
+    // Initialize locally so the new repo is immediately usable — this is the
+    // step plain `gh repo create` leaves to the user, and skipping it is why
+    // a freshly-created repo used to be "not a git repository".
+    let path: PathBuf = if here {
+        PathBuf::from(".")
+    } else {
+        PathBuf::from(repo_name)
+    };
+
+    let repo = git::init_repo(&path, Some(&clone_url))?;
+
+    // A README gives the initial commit real content; don't overwrite one the
+    // user already has (relevant with --here).
+    let readme = path.join("README.md");
+    if !readme.exists() {
+        std::fs::write(&readme, format!("# {repo_name}\n"))
+            .with_context(|| format!("writing {}", readme.display()))?;
+    }
+
+    let short = git::commit_all_in(&repo, "Initial commit")?;
+    println!("{} Initialized local repo ({short})", "✓".green().bold());
+
+    if no_push {
+        println!("Skipped push (--no-push). Push later with `ghx push`.");
+    } else {
+        git::push_branch(&repo, "origin", "main")?;
+        println!("{} Pushed main to origin", "✓".green().bold());
+    }
+
+    if !here {
+        println!("\n  cd {repo_name}");
+    }
+    Ok(())
+}
+
+fn init(dir: Option<&str>) -> Result<()> {
+    let path = PathBuf::from(dir.unwrap_or("."));
+    git::init_repo(&path, None)?;
+    let display = path.join(".git");
+    println!(
+        "{} Initialized empty git repository in {}",
+        "✓".green().bold(),
+        display.display()
+    );
     Ok(())
 }
 

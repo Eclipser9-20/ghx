@@ -104,6 +104,61 @@ pub fn open_current() -> Result<Repository> {
     Repository::discover(".").context("not a git repository (or any parent up to the root)")
 }
 
+/// Initialize a new git repository at `path`, with its default branch named
+/// `main` to match GitHub's default. When `remote_url` is given, an `origin`
+/// remote pointing at it is added. Creates the directory (and parents) if it
+/// doesn't exist. Reusing an already-initialized directory is fine — libgit2
+/// re-opens it rather than clobbering it.
+pub fn init_repo(path: &Path, remote_url: Option<&str>) -> Result<Repository> {
+    let mut opts = git2::RepositoryInitOptions::new();
+    opts.initial_head("main");
+    opts.mkpath(true);
+    let repo = Repository::init_opts(path, &opts)
+        .with_context(|| format!("initializing git repository at {}", path.display()))?;
+    if let Some(url) = remote_url {
+        // Tolerate a pre-existing origin (e.g. re-running create --here) by
+        // overwriting its URL rather than failing on the duplicate.
+        if repo.find_remote("origin").is_ok() {
+            repo.remote_set_url("origin", url)
+                .context("updating origin remote URL")?;
+        } else {
+            repo.remote("origin", url).context("adding origin remote")?;
+        }
+    }
+    Ok(repo)
+}
+
+/// Stage everything in the working tree and make a commit against `repo`.
+/// Used for the initial commit of a freshly-created repository, so it also
+/// handles the no-parent (unborn HEAD) case.
+pub fn commit_all_in(repo: &Repository, message: &str) -> Result<String> {
+    let sig = ghx_signature(repo)?;
+    let mut index = repo.index()?;
+    index.add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)?;
+    index.write()?;
+    let tree = repo.find_tree(index.write_tree()?)?;
+    let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    let parents: Vec<&git2::Commit> = parent.iter().collect();
+    let oid = repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)?;
+    Ok(oid.to_string()[..7].to_string())
+}
+
+/// Push a branch of an explicitly-opened repository to a remote. The
+/// path-taking sibling of `push_opts`, for flows (like `repo create`) that
+/// operate on a repo handle rather than the current directory.
+pub fn push_branch(repo: &Repository, remote_name: &str, branch: &str) -> Result<()> {
+    let mut remote = repo
+        .find_remote(remote_name)
+        .with_context(|| format!("no remote named '{remote_name}'"))?;
+    let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
+    let mut po = PushOptions::new();
+    po.remote_callbacks(remote_callbacks());
+    remote
+        .push(&[refspec.as_str()], Some(&mut po))
+        .with_context(|| format!("pushing {branch} to {remote_name}"))?;
+    Ok(())
+}
+
 fn repo_workdir_path(repo: &Repository, relative: &str) -> std::path::PathBuf {
     repo.workdir()
         .map(|d| d.join(relative))
@@ -1110,4 +1165,67 @@ pub fn worktree_remove(name: &str) -> Result<()> {
             .valid(true),
     ))
     .with_context(|| format!("removing worktree '{name}'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_repo_creates_discoverable_repo_with_origin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("proj");
+        let url = "https://github.com/octocat/proj.git";
+
+        let repo = init_repo(&path, Some(url)).unwrap();
+
+        // A real .git directory now exists and is discoverable from within.
+        assert!(path.join(".git").exists());
+        assert!(Repository::discover(&path).is_ok());
+
+        // origin points at the URL we passed.
+        let origin = repo.find_remote("origin").unwrap();
+        assert_eq!(origin.url(), Some(url));
+
+        // Default branch is main (HEAD is unborn but points at refs/heads/main).
+        let head_ref = repo.find_reference("HEAD").unwrap();
+        assert_eq!(head_ref.symbolic_target(), Some("refs/heads/main"));
+    }
+
+    #[test]
+    fn init_repo_without_remote_has_no_origin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = init_repo(tmp.path(), None).unwrap();
+        assert!(repo.find_remote("origin").is_err());
+    }
+
+    #[test]
+    fn init_repo_is_idempotent_and_updates_origin_url() {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path(), Some("https://github.com/octocat/a.git")).unwrap();
+        // Re-running with a different URL overwrites origin rather than failing.
+        let repo = init_repo(tmp.path(), Some("https://github.com/octocat/b.git")).unwrap();
+        assert_eq!(
+            repo.find_remote("origin").unwrap().url(),
+            Some("https://github.com/octocat/b.git")
+        );
+    }
+
+    #[test]
+    fn commit_all_in_creates_initial_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = init_repo(tmp.path(), None).unwrap();
+        // git2 needs an identity to sign the commit.
+        let mut cfg = repo.config().unwrap();
+        cfg.set_str("user.name", "Test").unwrap();
+        cfg.set_str("user.email", "test@example.com").unwrap();
+
+        std::fs::write(tmp.path().join("README.md"), "# proj\n").unwrap();
+        let short = commit_all_in(&repo, "Initial commit").unwrap();
+
+        assert_eq!(short.len(), 7);
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.summary(), Some("Initial commit"));
+        assert_eq!(head.parent_count(), 0);
+    }
 }
