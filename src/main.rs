@@ -342,6 +342,13 @@ fn main() {
     }
 }
 
+/// Whether an error is an authentication failure (a stale or invalid token), so
+/// a caller can retry unauthenticated.
+fn is_auth_error(e: &anyhow::Error) -> bool {
+    let msg = format!("{e:#}").to_lowercase();
+    msg.contains("401") || msg.contains("bad credentials") || msg.contains("unauthorized")
+}
+
 fn run() -> Result<()> {
     // A bare `ghx`, `ghx --help`/`-h`, or `ghx help` prints the tree
     // overview instead of clap's default flat help — everything else goes
@@ -361,9 +368,20 @@ fn run() -> Result<()> {
     }
 
     if let Some(channel) = cli.update {
+        // Releases are public, so a token is only a nice-to-have (rate limits).
+        // If a stored token is stale it 401s — don't let that block updating;
+        // retry unauthenticated.
         let token = config::Config::resolve_token_no_keychain()?;
+        let had_token = token.is_some();
         let client = api::Client::new(token)?;
-        return update::run(&client, &channel, cli.yes);
+        return match update::run(&client, &channel, cli.yes) {
+            Err(e) if had_token && is_auth_error(&e) => {
+                eprintln!("note: the stored token was rejected; updating without it.");
+                let client = api::Client::new(None)?;
+                update::run(&client, &channel, cli.yes)
+            }
+            other => other,
+        };
     }
 
     let Some(command) = cli.command else {
