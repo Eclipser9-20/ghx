@@ -151,12 +151,8 @@ pub fn push_branch(repo: &Repository, remote_name: &str, branch: &str) -> Result
         .find_remote(remote_name)
         .with_context(|| format!("no remote named '{remote_name}'"))?;
     let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
-    let mut po = PushOptions::new();
-    po.remote_callbacks(remote_callbacks());
-    remote
-        .push(&[refspec.as_str()], Some(&mut po))
-        .with_context(|| format!("pushing {branch} to {remote_name}"))?;
-    Ok(())
+    do_push(&mut remote, &[refspec.as_str()])
+        .with_context(|| format!("pushing {branch} to {remote_name}"))
 }
 
 fn repo_workdir_path(repo: &Repository, relative: &str) -> std::path::PathBuf {
@@ -254,6 +250,69 @@ fn remote_callbacks() -> RemoteCallbacks<'static> {
     let mut cb = RemoteCallbacks::new();
     cb.credentials(credentials_callback());
     cb
+}
+
+/// Turn a raw libgit2 transport error into a clearer message when it's an
+/// authentication failure. An expired or invalid login surfaces as an HTTP
+/// "authentication replays"/redirect error (libgit2 retrying the bad
+/// credential), which is otherwise baffling.
+fn prettify_push_error(e: git2::Error) -> anyhow::Error {
+    let msg = e.message().to_lowercase();
+    let looks_auth = e.code() == git2::ErrorCode::Auth
+        || (e.class() == git2::ErrorClass::Http
+            && (msg.contains("authentication")
+                || msg.contains("redirect")
+                || msg.contains("401")
+                || msg.contains("credentials")));
+    if looks_auth {
+        anyhow::anyhow!(
+            "authentication failed — your login may have expired. Run `ghx auth login`."
+        )
+    } else {
+        anyhow::Error::new(e)
+    }
+}
+
+/// Push refspecs to a remote and report a *rejected* ref as an error instead of
+/// silently succeeding.
+///
+/// libgit2's `remote.push` returns `Ok` even when the server rejects a ref
+/// (a non-fast-forward, or a GitHub Actions workflow file pushed without the
+/// `workflow` token scope). The `push_update_reference` callback is the only
+/// place that status is reported, so we capture it here.
+fn do_push(remote: &mut git2::Remote, refspecs: &[&str]) -> Result<()> {
+    let rejections: std::rc::Rc<std::cell::RefCell<Vec<String>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
+    let mut cb = RemoteCallbacks::new();
+    cb.credentials(credentials_callback());
+    {
+        let rejections = rejections.clone();
+        cb.push_update_reference(move |refname, status| {
+            if let Some(reason) = status {
+                rejections.borrow_mut().push(format!("{refname}: {reason}"));
+            }
+            Ok(())
+        });
+    }
+    let mut po = PushOptions::new();
+    po.remote_callbacks(cb);
+    remote
+        .push(refspecs, Some(&mut po))
+        .map_err(prettify_push_error)?;
+
+    let rejections = rejections.borrow();
+    if !rejections.is_empty() {
+        let mut msg = format!("remote rejected the push:\n  {}", rejections.join("\n  "));
+        if rejections.iter().any(|r| r.to_lowercase().contains("workflow")) {
+            msg.push_str(
+                "\nPushing a GitHub Actions workflow needs a token with the `workflow` scope — \
+                 re-run `ghx auth login` with a token that has it.",
+            );
+        }
+        bail!("{msg}");
+    }
+    Ok(())
 }
 
 pub fn clone(url: &str, dir: Option<&Path>) -> Result<()> {
@@ -778,12 +837,8 @@ pub fn push_opts(
     } else {
         format!("refs/heads/{branch}:refs/heads/{branch}")
     };
-    let mut po = PushOptions::new();
-    po.remote_callbacks(remote_callbacks());
-    remote
-        .push(&[refspec.as_str()], Some(&mut po))
-        .with_context(|| format!("pushing {branch} to {remote_name}"))?;
-    Ok(())
+    do_push(&mut remote, &[refspec.as_str()])
+        .with_context(|| format!("pushing {branch} to {remote_name}"))
 }
 
 pub fn push_tag(remote_name: &str, tag: &str) -> Result<()> {
@@ -792,12 +847,8 @@ pub fn push_tag(remote_name: &str, tag: &str) -> Result<()> {
         .find_remote(remote_name)
         .with_context(|| format!("no remote named '{remote_name}'"))?;
     let refspec = format!("refs/tags/{tag}:refs/tags/{tag}");
-    let mut po = PushOptions::new();
-    po.remote_callbacks(remote_callbacks());
-    remote
-        .push(&[refspec.as_str()], Some(&mut po))
-        .with_context(|| format!("pushing tag {tag} to {remote_name}"))?;
-    Ok(())
+    do_push(&mut remote, &[refspec.as_str()])
+        .with_context(|| format!("pushing tag {tag} to {remote_name}"))
 }
 
 // ---------------------------------------------------------------------
