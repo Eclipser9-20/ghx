@@ -96,7 +96,11 @@ fn login_device_flow() -> Result<()> {
     let device: DeviceCodeResp = http
         .post("https://github.com/login/device/code")
         .header("Accept", "application/json")
-        .form(&[("client_id", client_id.as_str()), ("scope", "repo read:org")])
+        .form(&[
+            ("client_id", client_id.as_str()),
+            // `workflow` is needed to push `.github/workflows/*` files.
+            ("scope", "repo read:org workflow"),
+        ])
         .send()
         .context("requesting device code")?
         .json()
