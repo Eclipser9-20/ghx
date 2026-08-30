@@ -1,6 +1,7 @@
 use crate::api::Client;
 use crate::config::Config;
 use anyhow::{bail, Context, Result};
+use colored::Colorize;
 use serde_json::Value;
 use std::io::Write;
 
@@ -31,14 +32,6 @@ fn channel_rank(tag: &str) -> u8 {
         1
     } else {
         2
-    }
-}
-
-fn channel_name(rank: u8) -> &'static str {
-    match rank {
-        0 => "dev",
-        1 => "beta",
-        _ => "stable",
     }
 }
 
@@ -131,18 +124,18 @@ pub fn run(client: &Client, channel: &str, yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    if let Some(installed) = &installed_tag {
-        let installed_rank = channel_rank(installed);
-        let target_rank = channel_rank(&tag);
-        // Switching to a less-tested channel is a heads-up, not a wall: print
-        // a brief warning and carry on. `--yes` silences even that.
-        if target_rank < installed_rank && !yes {
-            eprintln!(
-                "warning: switching from {} ({installed}) to {} ({tag}) — less tested \
-                 (dev: can break anytime; beta: testing phase; stable: fully tested).",
-                channel_name(installed_rank),
-                channel_name(target_rank),
-            );
+    // Note (in yellow) when pulling from an unstable channel. `--yes` silences it.
+    if !yes {
+        match channel_rank(&tag) {
+            0 => eprintln!(
+                "{}",
+                "You are updating to a dev release which is unstable and may change.".yellow()
+            ),
+            1 => eprintln!(
+                "{}",
+                "You are updating to a beta release which is still being tested.".yellow()
+            ),
+            _ => {}
         }
     }
 
