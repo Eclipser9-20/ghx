@@ -73,8 +73,21 @@ impl Config {
     /// store when one is reachable, otherwise it's kept in the plaintext
     /// config as a fallback (with a warning) so login still succeeds on
     /// systems with no secret-service backend.
+    ///
+    /// Set `GHX_NO_KEYCHAIN` to skip the OS credential store entirely and keep
+    /// the token in the config file. On macOS the keychain grants access per
+    /// code-identity, so every `ghx --update` (a new unsigned binary) makes it
+    /// re-prompt; opting out avoids that at the cost of a plaintext token.
     pub fn store_login(username: &str, token: &str) -> Result<()> {
         let base = Config::load().unwrap_or_default();
+        if std::env::var_os("GHX_NO_KEYCHAIN").is_some() {
+            return Config {
+                username: Some(username.to_string()),
+                token_fallback: Some(token.to_string()),
+                ..base
+            }
+            .save();
+        }
         match keyring_entry(username)?.set_password(token) {
             Ok(()) => Config {
                 username: Some(username.to_string()),
@@ -156,6 +169,10 @@ impl Config {
         let cfg = Self::load()?;
         if let Some(token) = cfg.token_fallback {
             return Ok(Some(token));
+        }
+        // Honor the keychain opt-out on reads too, so no prompt ever appears.
+        if std::env::var_os("GHX_NO_KEYCHAIN").is_some() {
+            return Ok(None);
         }
         let Some(username) = cfg.username else {
             return Ok(None);
